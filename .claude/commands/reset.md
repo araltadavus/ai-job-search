@@ -228,6 +228,8 @@ Wait for the user's response.
 | `- Tasks that energize:` | `[YOUR_ENERGIZING_TASKS]` |
 | `- Tasks that drain:` | `[YOUR_DRAINING_TASKS]` |
 | `- **Security**:` | `[YOUR_FINANCIAL_SITUATION_CONTEXT]` |
+| `- **Screening floor**:` | `[YOUR_SALARY_FLOOR_NET_MONTHLY]` |
+| `- **Target**:` | `[YOUR_SALARY_TARGET_NET_MONTHLY]` |
 | `- **Flexibility**:` | `[YOUR_SCHEDULE_CONSTRAINTS]` |
 | `- **Professional development**:` | `[YOUR_GROWTH_PRIORITIES]` |
 

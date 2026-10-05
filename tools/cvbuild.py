@@ -105,7 +105,9 @@ def compile_tex(tex: Path, engine: str, passes: int = 2) -> tuple[int | None, li
         )
         out = proc.stdout or ""
         errors = [l for l in out.splitlines() if l.startswith("!")]
-        m = re.search(r"Output written on .*?\((\d+) pages?", out)
+        # TeX hard-wraps terminal lines at 79 columns, so with a long filename this line
+        # arrives as "...pdf (1 pag" + newline + "e)." -- join the lines before matching.
+        m = re.search(r"Output written on .*?\((\d+) pages?", re.sub(r"[\r\n]", "", out))
         if m:
             pages = int(m.group(1))
     return pages, errors

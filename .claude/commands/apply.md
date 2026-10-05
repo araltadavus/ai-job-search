@@ -38,13 +38,24 @@ Read the evaluation framework:
 - `.claude/skills/job-application-assistant/04-job-evaluation.md`
 - `.claude/skills/job-application-assistant/01-candidate-profile.md`
 
-Using the framework from `04-job-evaluation.md`, evaluate the job posting against the candidate's profile. If the salary lookup tool is configured, run:
+Using the framework from `04-job-evaluation.md`, evaluate the job posting against the candidate's profile and **compute the overall fit score first** — the compensation step below is gated on it, because the screening floor can be tiered by score.
 
-```bash
-python salary_lookup.py "<Company Name>" --json
-```
+### 1a. Compensation analysis (MANDATORY once the score exists)
 
-If the posting specifies a city, add `--city "<City>"` to narrow results. Parse the JSON output and include the salary benchmark in the evaluation. If the tool is not configured or returns an error, skip the salary benchmark.
+**Dispatch the `salary-analyst` agent via the Agent tool**, passing inline: the company, the role, the posting text verbatim, the posting URL, and **the fit score you just computed**. It reads the candidate's screening floor from `04-job-evaluation.md` (Life situation alignment → `Screening floor`), needs the score to select the right floor when that floor is tiered, and is instructed to apply the stricter floor if you omit the score. When the input is a URL and the Source Host Verification below flags the host as unverified, settle that with the user before dispatching — the agent spends real fetches. If the floor line still holds its `[YOUR_SALARY_FLOOR_NET_MONTHLY]` placeholder, the agent reports `NO FLOOR ON FILE` — tell the user, and suggest filling it via `/setup` rather than inventing one.
+
+**Before dispatching, answer two questions about the posting yourself and put both answers in the prompt.** They change what the agent is being asked to do, and it cannot infer either reliably from posting text alone:
+
+1. **Is a band already published?** In the posting, in a recruiter's message, on the ATS row — anywhere. If it is, say so explicitly and quote it. **The agent's job is then conversion and judgement, not discovery**, and it should not spend fetches rediscovering a number you are already holding. A published band in a **foreign currency** additionally requires a fetched, cited FX rate — say that too.
+2. **What is the contract structure?** Nómina (payroll), B2B/honorarios, contractor, or unstated. A published figure means nothing until this is settled: the same number is a different amount of money under each. Where it is B2B or contractor, ask specifically for the **net-equivalent** and for the **cost of the forgone statutory benefits** (IMSS, aguinaldo, PTU, severance, INFONAVIT), so the offer can be compared against a nómina one.
+
+The failure mode these two questions prevent: a step framed entirely around discovery, run against a posting whose band was published twice in writing and whose contract was B2B — the caller had to supply both facts ad hoc, and the agent had nothing to discover.
+
+It returns six lines — tier, floor verdict, the nómina ask, the honorarios ask, the walk-away, and a sentence the candidate can say out loud, plus a seventh net-equivalent line when the contract is B2B/honorarios — plus the path of the `salary_analysis.md` it persisted to the application archive. **Carry those figures forward**: application-form fields (`08-application-forms.md` → "Field type: salary expectation") and any recruiter reply draw on them, and a number invented later under time pressure is how an application gets knocked out on a structured field.
+
+**A `CANNOT TELL` verdict is the expected result *when nothing is published*, and it is not a failure.** Most Mexican postings publish no figure (279 of 285 in one Aug–Sep 2026 LinkedIn corpus). It means the band is discovered in the first call rather than at the filter, and it is not a reason to stop. **Where a band *is* published, `CANNOT TELL` is a wrong answer** — check that the agent actually used what it was given.
+
+*Optional extra input:* if the salary lookup tool is configured (`salary_data.json` exists), run `python salary_lookup.py "<Company Name>" --json` (add `--city "<City>"` when the posting names one) and pass the company salary index to the agent as one more data point. If the tool is not configured or returns an error, skip it — the agent does not depend on it.
 
 ### Source Host Verification (when input is a URL)
 
@@ -67,7 +78,7 @@ Present the evaluation to the user with:
 2. **Skills match** - which required/preferred skills match vs. gaps
 3. **Experience match** - how work history maps to the role
 4. **Behavioral/culture match** - how behavioral profile fits the role/company culture
-5. **Salary benchmark** - salary index for the company (if available)
+5. **Compensation** - the `salary-analyst` block verbatim: tier and confidence, floor verdict, both asks, the walk-away (plus the salary index, if the lookup tool is configured)
 6. **Overall fit score** and recommendation (strong fit / moderate fit / weak fit)
 
 After presenting the evaluation, ask the user:
@@ -158,7 +169,7 @@ Also read the most recent existing CV and cover letter files for concrete struct
 *In both filenames below, `<company>_<role>` is derived by the **Subfolder naming** rule in `documents/README.md` — the same rule `/outcome` Step 1.4 uses for the archive folder, so a `/` or other path character in a company or role name can never split the filename across directories.*
 
 ### CV (`cv/main_<company>_<role><CV_EXT>`)
-- In the **CV language from the profile** (the `CV language:` line in CLAUDE.md's Identity section). When the profile does not set one, default to **English**. Never switch language per posting - the CV language is a profile-level choice, so all CVs stay consistent and reusable
+- In the **CV language from the profile** (the `CV language:` line in CLAUDE.md's Identity section). When the profile does not set one, default to **English**. The CV language is a profile-level choice, so all CVs stay consistent and reusable - do not switch it merely because a posting happens to be written in another language. **One narrow exception**, defined in `05-cv-templates.md` -> "CV language: profile default, with one exception": when the posting *and* the employer's whole recruitment surface (application form, portal, screening questions) are in another language the candidate speaks at working level, switch to it for that application. It is a **switch, never a second CV** submitted alongside the first
 - Follow the moderncv/banking format from `05-cv-templates.md`
 - Tailor the profile statement and experience bullets to the specific role
 - Reframe skills and achievements to match job requirements

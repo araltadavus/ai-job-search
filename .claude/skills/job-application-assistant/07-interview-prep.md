@@ -1,5 +1,5 @@
 ---
-framework_version: 1.0.1
+framework_version: 1.0.2
 ---
 
 # Interview Preparation Guide
@@ -42,21 +42,24 @@ Keep answers to 1-2 minutes. Be specific. End with what you learned or would do 
 **R:** [OUTCOME]
 **Use for:** "[QUESTION_TYPE_1]", "[QUESTION_TYPE_2]"
 
-<!-- Add more STAR examples as needed. Aim for 4-6 covering different competencies. -->
+<!-- Add more STAR examples as needed. Aim for 4-6 covering different competencies. When one
+surfaces, record the underlying fact in the relevant experience/ file too - see /recall. A STAR
+example that exists only here is unsupported to a later drafting session and will be stripped from
+CVs as a fabrication. -->
 
 ## Common Tough Questions
 
 ### "Why did you leave [previous company]?"
-> [PREPARE YOUR ANSWER - be honest, forward-looking, no negativity about former employer]
+> [PREPARE YOUR ANSWER - be honest, forward-looking, no negativity about former employer. If the role was eliminated in a restructuring or layoff, say so plainly and early: it is verifiable and clearly structural, and dressing an involuntary exit as a choice collapses the moment someone asks a direct follow-up. Quote only figures about the layoff that you have checked against a published source - a wrong headcount or percentage is checkable and costs credibility. Do not speculate about who decided]
 
 ### "You don't have [specific skill/experience]."
-> [PREPARE YOUR ANSWER - acknowledge the gap, bridge to adjacent experience, show willingness to learn]
+> [PREPARE YOUR ANSWER - acknowledge the gap plainly, bridge to the nearest genuine adjacency, then say what you would do to close it. The honest boundaries recorded in `experience/` are what make the adjacent claims credible, so state them out loud. Answer a gap with what transfers and what you are doing about it - never with a claim, a duration or a project you cannot back with a document, a commit or a third party]
 
 ### "Where do you see yourself in 5 years?"
 > [PREPARE YOUR ANSWER - show ambition aligned with the role's growth path]
 
 ### "What's your biggest weakness?"
-> [PREPARE YOUR ANSWER - genuine weakness with concrete mitigation strategy]
+> [PREPARE YOUR ANSWER - genuine weakness with concrete mitigation strategy. The mitigation should be a habit you already practise (what you now do before a planning session, say), not an intention to improve]
 
 ### "Why this company specifically?"
 > Customize per company. Must reference: specific projects, company values, market position, or team structure. Never give a generic answer.

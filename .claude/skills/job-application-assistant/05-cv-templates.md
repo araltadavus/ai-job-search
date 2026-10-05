@@ -1,5 +1,5 @@
 ---
-framework_version: 1.4.5
+framework_version: 1.4.6
 ---
 
 # CV Templates and Tailoring Guide
@@ -67,6 +67,9 @@ Expected output: `Output written on main_<company>_<role>.pdf (2 pages, ...)`. A
 }}
 \usepackage[scale=0.77]{geometry}
 \usepackage{import}
+% Prevents a \cventry title being stranded at the foot of a page with its bullets
+% spilling to the next. Put \needspace{5\baselineskip} before a \cventry that orphans.
+\usepackage{needspace}
 
 % Personal data
 \name{[FIRST_NAME]}{[LAST_NAME]}
@@ -75,6 +78,9 @@ Expected output: `Output written on main_<company>_<role>.pdf (2 pages, ...)`. A
 \address{[YOUR_ADDRESS]}{}{}
 \phone[mobile]{[YOUR_PHONE]}
 \email{[YOUR_EMAIL]}
+% Consider spelling the URL out as the link text (e.g. linkedin.com/in/<you>) rather
+% than a bare label - an ATS parser reads the text layer, where a label like
+% "LinkedIn" leaves no address behind. Drop the GitHub link if you have none.
 \extrainfo{\href{[YOUR_LINKEDIN_URL]}{LinkedIn}, \href{[YOUR_GITHUB_URL]}{GitHub}}
 
 \begin{document}
@@ -94,6 +100,37 @@ Expected output: `Output written on main_<company>_<role>.pdf (2 pages, ...)`. A
 ### Color overrides
 
 The `\renewcommand*` on `\namefont` and the three `\colorlet` lines in the preamble are required on lualatex+MiKTeX. Without them the name and section headings render in black even though `\moderncvcolor{blue}` is set, which looks inconsistent with the rest of the blue accent scheme (links, bullet markers, contact icons). The cause: `moderncvstylebanking.sty` defines the name colours with `\colorlet`, which *copies* the accent colour as it is before the scheme is applied, so the name colours are frozen to the pre-scheme value; re-assigning them with `\colorlet` after `\moderncvcolor{blue}` (as the preamble does) re-pins them to `color1`. `\namefont` is the shared hook every name-style macro routes through, so the block is version-agnostic - including moderncv 2.3.1 from Debian/Ubuntu apt, which has no `\firstnamestyle`/`\lastnamestyle` at all. Both names render bold; if you prefer regular weight, change `\bfseries` to `\mdseries` in the `\namefont` line (the weight now lives there, so it applies to the whole name). Don't drop the overrides - on most modern installs the defaults render visibly wrong.
+
+### Never leave a blank line inside a `\cventry` (important)
+
+`moderncv`'s `\cventry` takes its body as an ordinary argument, **not a `\long` one**, so a blank or
+whitespace-only line anywhere inside it is a paragraph break and the compile dies with:
+
+```
+! Paragraph ended before \cventry was complete.
+! LaTeX Error: Lonely \item--perhaps a missing list environment.
+```
+
+**The error message points nowhere near the cause**, and the page count can still report correctly
+while the compile has failed, so `pages 2 / 2 ok` next to `compile FAIL` is exactly this.
+
+**How it happens in practice:** deleting a bullet with a whitespace-tolerant replacement leaves the
+surrounding newline and indentation behind as an empty line. That is a nine-character defect that
+costs a full diagnose-and-recompile cycle.
+
+**The fix, and it is worth keeping as a one-liner:**
+
+```python
+import re
+# collapse any whitespace-only line that sits immediately before an \item
+s = re.sub(r"\n[ \t]*\n(?=[ \t]*" + re.escape("\\item") + r")", "\n", s)
+```
+
+**Check it before compiling** whenever a script has removed a bullet:
+
+```bash
+grep -nzoP '\\cventry(?:[^{}]|\{[^{}]*\})*\n[ \t]*\n' cv/main_<file>.tex
+```
 
 ### Spacing inside itemize lists (important)
 
@@ -129,7 +166,9 @@ The CV language is a **profile-level choice** (`CV language:` in the candidate p
 - the posting is written entirely in a language the candidate speaks at working level or better, **and**
 - the employer's whole recruitment surface is in that language too - the application form, the portal, the screening questions. A posting merely *translated* into another language on an otherwise English ATS does not qualify; the surface is the tell.
 
-**The reason to break the default there is concrete: ATS keyword matching is often literal.** A posting's required terms are written in the posting's own language, and a CV drafted in another language matches them only as synonyms or via translation - which a literal parser scores as zero. A CV kept in the posting's language covers its required terms verbatim; a translated CV covers the same concepts, but not the same strings.
+Two reasons to break the default there, the second far more concrete than the first:
+1. The first person to open the CV almost certainly reads in that language.
+2. **ATS keyword matching is often literal.** A posting's required terms are written in the posting's own language, and a CV drafted in another language matches them only as synonyms or via translation - which a literal parser scores as zero. A CV kept in the posting's language covers its required terms verbatim; a translated CV covers the same concepts, but not the same strings. Measured on one Spanish-language application: the English CV covered every posting keyword *by translation*, while the Spanish CV matched the same concepts **verbatim**. A term the posting itself writes in English (a product or practice name such as "Component Libraries") stays in English in the localised CV.
 
 **When you switch, it is a SWITCH, not an addition. Never submit two CVs to one application.** Two versions of the same document create a "which one is real" problem for the reader, double the factual-consistency surface the verification checklist has to hold, and filing the localised one as an *additional* attachment marks it as secondary when it is in fact the more appropriate document for that application. Keep the other language's version in `cv/` as a reference and submit exactly one.
 
@@ -160,6 +199,12 @@ specifics pulled from the relevant `experience/` file for the posting at hand (s
 
 **For [YOUR_SECONDARY_ROLE_TYPE] roles:**
 > [YOUR_PROFILE_STATEMENT_TEMPLATE_2]
+
+**Statement-writing rules.** Never open with a title the candidate did not hold - a positioning title
+from a LinkedIn headline ("Staff", "Principal", "Manager") is not a held title, and the CV's title line
+must match the last one actually held. Lead with scope and evidence instead. Where a posting combines
+two of the candidate's directions, write the statement to the combination rather than picking one; that
+overlap is where a profile is genuinely rare.
 
 Statements labeled *[Used for: <company>_<role>]* were extracted from archived application drafts by `/setup` Path A. They are **phrasing references, never fact sources**: when drafting from one, every factual claim still comes from `01-candidate-profile.md` - a past tailored draft does not vouch for its own accuracy.
 

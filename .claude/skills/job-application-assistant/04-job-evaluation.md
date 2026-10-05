@@ -1,5 +1,5 @@
 ---
-framework_version: 1.2.7
+framework_version: 1.2.8
 ---
 
 # Job Evaluation Framework
@@ -139,10 +139,14 @@ scoring rather than folding it into the Technical Skills number.
 
 **Life situation alignment:** Consider personal constraints:
 - **Security**: [YOUR_FINANCIAL_SITUATION_CONTEXT]
+- **Screening floor**: [YOUR_SALARY_FLOOR_NET_MONTHLY]
+- **Target**: [YOUR_SALARY_TARGET_NET_MONTHLY]
 - **Flexibility**: [YOUR_SCHEDULE_CONSTRAINTS]
 - **Professional development**: [YOUR_GROWTH_PRIORITIES]
 
 ### 6. Salary Benchmark (Optional)
+
+The primary compensation step is the `salary-analyst` agent (`/apply` Step 1a), which classifies the employer's tier, checks the candidate's screening floor and sizes the ask - see **Compensation Framework** below. The salary index lookup in this section is one optional extra data point for it.
 
 If the salary lookup tool is configured (`salary_data.json` exists), look up the company:
 ```
@@ -163,6 +167,77 @@ Present findings as:
 Interpret results relative to the baseline defined in the data file's metadata. For index-based data, higher typically means above-market compensation.
 
 If the salary tool is not configured, skip this section.
+
+## Compensation Framework
+
+Read by `/apply` Step 1a and the `salary-analyst` agent. The candidate's own figures live in **Life
+situation alignment** above (`Screening floor`, `Target`), filled by `/setup`; the market data lives in
+`10-market-facts.md`, each figure with its source and read date. This section is the reasoning that
+connects them. The mechanics are written for the Mexican market (nómina vs honorarios, peso bands,
+employer tiers); the reasoning about floors, ceilings and anchoring carries to any market.
+
+**How to record the floor.** A net monthly figure with its currency, e.g. `MXN <amount> net/month`.
+Optionally tier it by fit score - `fit >= 75: <lower figure>; fit < 75: <higher figure>` - for the
+reasons below. Record a gross figure beside it if you know the pair; it is the agent's conversion anchor.
+
+### The employer tier sets the ceiling, not the national market
+
+The same title spans roughly **5x** across employer tiers in Mexico (measured from published bands,
+Sep 2026). **Anchoring on a national salary survey is the single costliest mistake available here.**
+Classify the employer first - `10-market-facts.md` → tier table, and read its `n` and `Confidence`
+columns before using any row, because most rows rest on one or a handful of postings - then reason
+about the number. Employer origin moves pay more than seniority does: a Senior seat at a US-origin
+employer often out-earns a Lead seat at a Mexico-origin one.
+
+### The screening floor
+
+- **It is a screening floor, not an acceptance floor.** Applying costs hours and the band is usually
+  discovered in the first call, so the binding decision is at the offer, never at the filter.
+- **Tier it by fit score when that is honest.** A role that scores high pays part of its value in
+  trajectory - the lane the candidate wants, a named growth component, remote, employer tier, a title
+  that advances the ladder. A role that does not advance the career has to pay for itself in cash
+  alone. A lower floor for high-fit roles and a higher one below says exactly that.
+- **Check the floor against the median of the tier where the best options live.** A flat floor set
+  above the tier-2 benchmark in `10-market-facts.md` rejects the median foreign employer on Mexican
+  payroll - the candidate declines them before they decline the candidate. A floor set too low
+  re-admits the tier the candidate is trying to leave; the tiering is the mitigation.
+- **A high floor is also a market selection.** It excludes consultancies and most mid-market domestic
+  employers and commits the search to foreign-funded employers, remote-for-foreign-employer roles or
+  the top local tier. Say so when the floor is set, so the selection is a decision rather than a
+  side effect.
+- **When the fit score has not been computed yet, apply the stricter floor.**
+- **Never state a maximum to an employer.** A floor protects; a ceiling only caps. A ceiling set at
+  the start of the band the candidate most wants to reach forfeits the upside and protects against
+  nothing.
+
+### Why accepting low compounds
+
+- **Mexican employers commonly ask the current salary first and anchor on it.** An accepted figure is
+  therefore not only this job's pay; it sets the starting point of the next negotiation too.
+  Compounding that against a below-band base is how someone stays two cycles under their level.
+- **A large raise on a below-market base can still be below market.** It will feel like a win. Name
+  that trap explicitly when an offer lands near the floor.
+- **Break-even arithmetic, so nobody re-derives it wrong.** Accepting the floor now versus waiting
+  `D` months for the target breaks even at `months = target × D / (target − floor)`. With the floor
+  20% below the target, `D = 3` breaks even at 15 months and `D = 6` at 30. So "earning now beats
+  waiting" is true below that tenure and false above it - it depends entirely on expected tenure.
+- **Name the runway pressure when evaluating an offer.** Distinguish financial runway from
+  psychological runway: savings the candidate is unwilling to spend, or a self-imposed deadline stated
+  in *time* rather than money, push toward accepting earlier and lower than a pure cash calculation
+  suggests.
+- **The real lever is pipeline, not price.** The target is not reached by refusing the floor; it is
+  reached by having several live processes at once. Bands do move under competition.
+
+### Source hygiene for every salary figure
+
+- **Persist it with its URL and a verbatim quote at the time it is fetched.** A tier table once written
+  from memory three days after its research had two of its four rows wrong or unsupported; that is why
+  the `salary-analyst` writes `salary_analysis.md` to the application archive.
+- **A derived figure carries its basis.** When a figure is converted from another currency, record the
+  source figure, the FX rate and the date of both, never only the result. A converted number with no
+  basis cannot be re-checked, only re-believed.
+- **Settle a disputed figure from the page's own text, never from a summariser's paraphrase of it.**
+- Excluded sources, with the reasons, are listed in `10-market-facts.md`.
 
 ## Output Format
 

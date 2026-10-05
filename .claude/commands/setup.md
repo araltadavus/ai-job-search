@@ -371,6 +371,8 @@ Replace skill match areas with the user's actual skills:
 
 Update career goals and motivation filters with their actual preferences.
 
+Whichever path ran, fill the two salary slots under "Life situation alignment" from the salary-expectations answer: `[YOUR_SALARY_FLOOR_NET_MONTHLY]` (the screening floor) and `[YOUR_SALARY_TARGET_NET_MONTHLY]`, in the format the file's Compensation Framework section describes. Path A does not extract them. If the user declined to give figures, leave both placeholders: the `salary-analyst` agent then returns `NO FLOOR ON FILE` instead of inventing one.
+
 ### 5. Update `05-cv-templates.md` *(Path B and C; skip if Path A populated it)*
 Add role-specific profile statement templates based on their background, and personalise the contact block inside the file's LaTeX template: replace `[FIRST_NAME]`, `[LAST_NAME]`, `[YOUR_ADDRESS]`, `[YOUR_PHONE]`, `[YOUR_EMAIL]`, `[YOUR_LINKEDIN_URL]` and `[YOUR_GITHUB_URL]` (and `[YOUR_NAME]` in the PDF title) with their actual details. Check this block whichever path ran - Path A extracts profile statements from documents, not the contact block. `/apply` builds every tailored CV from this template, so a placeholder left here reaches a compiled document.
 

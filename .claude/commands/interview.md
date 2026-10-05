@@ -1,6 +1,6 @@
 # /interview - Prepare for an Interview on a Tracked Application
 
-You are preparing the user for a real, scheduled interview on one of their applications. The frameworks for this already exist - `07-interview-prep.md` (STAR examples, tough questions, questions to ask, roleplay protocol) and the Company Research Checklist in `04-job-evaluation.md` - and the `/outcome` archive records which stage the user is at and what earlier stages surfaced. This command wires them together into a stage-specific prep pack and an optional mock interview.
+You are preparing the user for a real, scheduled interview on one of their applications. The frameworks for this already exist - `07-interview-prep.md` (STAR examples, tough questions, questions to ask, roleplay protocol) and the Company Research Checklist in `04-job-evaluation.md` - and the `/outcome` archive records which stage the user is at and what earlier stages surfaced. This command wires them together into a stage-specific prep pack, a setup prompt for rehearsing out loud with a conversational voice AI, and an optional mock interview here in the conversation.
 
 `/apply` optimizes what the company reads; `/interview` optimizes what the company hears. The bridge between them is consistency: the interviewer has read the submitted CV and cover letter, so everything prepared here must match what those documents claim.
 
@@ -82,9 +82,104 @@ Save the pack in the archive folder derived in Step 1 as `interview_prep_<stage>
 
 ---
 
+## Step 3b: Generate the Voice Mock-Interview Prompt
+
+Produce a second artifact alongside the prep pack: a setup prompt for a **conversational voice AI**, so
+the user can rehearse the interview **out loud** rather than only reading. Save it in the same archive
+folder as `mock_interview_prompt_<stage>.md`, one file per stage.
+
+Built and validated against `app.sesame.com`, but write it to work with any voice model that accepts a
+setup turn.
+
+**Say plainly what this is for, in the file itself.** It trains **delivery**: speaking under
+conversational pressure, answer length, where to stop, whether structure survives when nobody prompts
+for it. It does **not** validate content, because the voice model has no access to `experience/` and
+cannot tell a grounded claim from a retired one. Overselling it is how a user ends up trusting it to
+catch things it structurally cannot.
+
+### The file contains three pasteable blocks
+
+**BLOCK 1 — SETUP**, in six numbered sections, pasted first in every session:
+
+1. **Who the interviewer is** — persona matched to *this* stage, and, just as important, **what they are
+   not**. A recruiter screen must say "you are not a technical interviewer and must not pretend to be
+   one"; a CTO round must say the opposite. Without that line the model defaults to generic technical
+   questioning at every stage and the rehearsal is useless for screens.
+2. **Who the candidate is** — roles, dates, employers, depth boundaries, language level, availability.
+   Enough for realistic follow-ups, no more.
+3. **Claims the candidate must NOT make.** *(The load-bearing section. Derive it from the `Do NOT say`
+   tables in the relevant `experience/` files, plus the consistency brief from Step 3.)* Instruct the
+   model to **interrupt immediately** on any of them, even in full-run mode where feedback is otherwise
+   held to the end. **Rehearsing a retired claim fluently is worse than not rehearsing at all**, because
+   repetition is what makes it come out smoothly under pressure. This section is why the artifact is
+   safe to use.
+4. **The role and the honest gaps** — the posting's own framing plus the gaps Step 3 identified, so the
+   model probes them the way a real interviewer would instead of inventing different ones.
+5. **The feedback rubric — and it must be DERIVED, never copied.** See below.
+6. **Staying in role** — an explicit anti-drift instruction. Conversational voice models get steadily
+   warmer and more agreeable across a session; by the last third of a long simulation they are
+   supporting rather than evaluating. Tell the model to return to the interviewer register when it
+   notices this, and warn the user in the file that short sessions are the real mitigation.
+
+**BLOCK 2A — DRILL** (the default): one question, full answer, feedback under ~150 words, then
+"Again, or next?". On "again", the model repeats **the same** question and compares the second attempt
+to the first explicitly. This is where most of the value is.
+
+**BLOCK 2B — FULL RUN**: the whole stage end to end, no feedback during except retired-claim
+interrupts, then a written report. Tell the user to run this **twice at most** — drift makes the tail
+of a long session worthless.
+
+**BLOCK 3 — SPOKEN SETUP**: a compressed version the user can say out loud, for tools with no
+system-prompt field. It must fit in a few breath-groups and re-anchor only the two things that matter
+most: the persona, and the rubric's direction.
+
+### The rubric is candidate-specific. Deriving it correctly is the whole trick.
+
+**A voice model left to itself gives generic interview coaching: "elaborate more", "show more
+enthusiasm", "add more detail".** All three push toward *talking more*. For a candidate whose failure
+mode is over-explaining, that trains the defect. For a candidate who under-sells, the same generic
+advice happens to be right. **So the rubric must invert or reinforce the default depending on who the
+user is, and the prompt must say which, forcefully, or the model reverts.**
+
+Derive it from:
+- `02-behavioral-profile.md` — Growth Areas especially
+- Recorded feedback in `outcome.md` from earlier stages
+- The tone findings from `/apply`'s `application-skeptic` run, if that application has one
+
+State the criteria as an ordered list the model scores against, with the candidate's specific failure
+mode first, and require **quoted evidence** rather than adjectives. Require **one** concrete rewrite,
+not a list.
+
+*Worked example.* For a candidate whose behavioral profile recorded over-explaining and under-claiming,
+interviewing in a second language, and whose skeptic run had counted several self-diminishing moves in
+the cover letter, the rubric ordered: answer length with a 90-second ceiling; **continuing to explain
+after conceding a gap**, flagged as the single most important finding; a count of self-diminishing
+phrases, quoted; signposting; the exact sentences where second-language fluency degraded; the
+retired-claim check; one rewrite. It opened by telling the model in terms that encouraging more
+elaboration "is the wrong direction and will make me worse". **A different candidate would need close
+to the opposite list.**
+
+### Two rules that ride with the artifact
+
+- **Language.** Write the prompt in the language the interview will actually be conducted in, which is
+  not always the language of the posting or of this conversation. When the stage explicitly assesses
+  language proficiency, say so inside the persona so the model does not slip into the candidate's
+  native language to be helpful.
+- **Privacy.** This gets pasted into a third-party service. Include only what makes the rehearsal
+  realistic. **Never include `salary_analysis.md` content**, negotiation strategy, walk-away figures or
+  tax analysis. A band the employer published itself is fine, since they published it; the candidate's
+  own reasoning about it is not. State this in the file so the rule survives the session.
+
+---
+
 ## Step 4: Offer a Mock Interview
 
-Ask if the user wants to practice. If yes, run the roleplay **in this conversation** following the Roleplay Guidelines in `07-interview-prep.md` exactly: warm-up first, then role-specific technical questions, 1-2 behavioral questions tied to the posting's competencies, and one tough question or curveball. After each answer, give brief feedback - what worked, what to sharpen, and which STAR example from the pack would have served better.
+**There are two rehearsal channels, and they are good at different things.** The voice prompt from
+Step 3b trains delivery out loud, which text cannot; the in-conversation roleplay below trains content
+and judgement, which a voice model cannot check. Offer both, and say which is which. For a stage that
+explicitly assesses language proficiency, point the user at the voice prompt first.
+
+Ask if the user wants to practice here. If yes, run the roleplay **in this conversation** following the Roleplay Guidelines in `07-interview-prep.md` exactly: warm-up first, then role-specific technical questions, 1-2 behavioral questions tied to the posting's competencies, and one tough question or curveball. After each answer, give brief feedback - what worked, what to sharpen, and which STAR example from the pack would have served better.
 
 Calibrate feedback against `02-behavioral-profile.md`: coach toward the user's natural register, not a generic ideal - the same voice-consistency rule the `/apply` reviewer applies to cover letters.
 
@@ -106,7 +201,8 @@ If Step 3 drafted new STAR answers the user approved for keeps, remind them thos
 2. **Honesty on gaps.** Weak matches get bridge answers (acknowledge → adjacent experience → learning path), never invented experience. Same rule as everywhere else in this repo.
 3. **Verified research only.** Company specifics go in the pack only after independent confirmation. Interviewer notes stick to public professional information.
 4. **Stage-appropriate prep.** A phone screen pack and a final-round pack are different documents; recorded feedback from earlier stages takes priority over generic question lists.
-5. **Write only to the application archive** — with one exception. The prep pack lands in the archive folder derived in Step 1; framework files are not edited, except appending user-approved STAR examples to `07-interview-prep.md` on explicit request.
+5. **The voice prompt states its own limits, and carries the retired-claim list.** The Step 3b artifact gets pasted into a third-party voice model that cannot see `experience/` and therefore cannot tell a grounded claim from a retired one. Two things are non-negotiable in it: the **claims the candidate must not make**, with an instruction to interrupt on them, because rehearsing a retired claim fluently is worse than not rehearsing at all; and an honest statement that the artifact trains delivery, not content. Never put negotiation strategy, walk-away figures or `salary_analysis.md` content into it.
+6. **Write only to the application archive** — with one exception. The prep pack and the voice prompt land in the archive folder derived in Step 1; framework files are not edited, except appending user-approved STAR examples to `07-interview-prep.md` on explicit request.
 
    **The exception is the profile sources — `experience/` and `01-candidate-profile.md`.** Interview prep is where new facts surface most often: the user recalls a metric, corrects a scope, or fills in a STAR stub. When that happens, write the fact into the sources as well as into the prep pack. A fact recorded only in prep material reads as unsupported to a later drafting session and gets stripped from CVs as a fabrication. Prep files are not a substitute for the profile.
 

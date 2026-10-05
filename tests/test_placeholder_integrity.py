@@ -21,14 +21,6 @@ from pathlib import Path
 
 UPSTREAM = "MadsLorentzen/ai-job-search"
 
-# Repositories where these guards must run rather than skip. A populated
-# personal fork would fail them (that is the whole point of the guard), but a
-# *template* fork that re-shares the framework unpopulated - like Jesdalara's -
-# needs them just as much as upstream does. Add a fork here (matching ci.yml's
-# placeholder-integrity `if:`) rather than repeating the repo string in both
-# skipIf calls below.
-TEMPLATE_REPOS = {UPSTREAM, "Jesdalara/ai-job-search"}
-
 REPO = Path(__file__).resolve().parent.parent
 CI = REPO / ".github" / "workflows" / "ci.yml"
 EXAMPLE_CV = REPO / "cv" / "main_example.tex"
@@ -53,8 +45,8 @@ def personalize_cv(text: str) -> str:
 
 
 @unittest.skipIf(
-    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) not in TEMPLATE_REPOS,
-    "placeholder-integrity guards unpopulated template repos; personalized forks skip these via /setup",
+    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) != UPSTREAM,
+    "placeholder-integrity guards the pristine upstream template; forks personalize these files via /setup",
 )
 class TestCvSentinelsAreDataLocated(unittest.TestCase):
     def setUp(self):
@@ -90,8 +82,8 @@ class TestCvSentinelsAreDataLocated(unittest.TestCase):
 
 
 @unittest.skipIf(
-    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) not in TEMPLATE_REPOS,
-    "placeholder-integrity guards unpopulated template repos; personalized forks skip these via /setup",
+    os.environ.get("GITHUB_REPOSITORY", UPSTREAM) != UPSTREAM,
+    "placeholder-integrity guards the pristine upstream template; forks personalize these files via /setup",
 )
 class TestProfileSentinelIsDataLocated(unittest.TestCase):
     def test_ci_checks_a_data_placeholder_not_the_header_comment(self):

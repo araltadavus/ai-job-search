@@ -230,9 +230,9 @@ jobs:
 
   placeholder-integrity:
     name: Placeholder integrity (upstream template only)
-    # Template forks that re-share the framework need this guard too; a populated
-    # personal fork would fail it, which is why upstream restricts it to itself.
-    if: github.repository == 'MadsLorentzen/ai-job-search' || github.repository == 'Jesdalara/ai-job-search'
+    # A populated personal fork would fail this guard, which is why it is
+    # restricted to the upstream template repo.
+    if: github.repository == 'MadsLorentzen/ai-job-search'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

@@ -1,5 +1,5 @@
 ---
-framework_version: 1.0.3
+framework_version: 1.0.4
 ---
 
 # Cover Letter Templates and Tailoring Guide
@@ -55,15 +55,27 @@ The `\lettercontent{}` macro appends `\\` to its argument. This breaks when the 
 
 The font wrapper is mandatory — if you just move `\begin{itemize}` outside `\lettercontent{}` without the `\fontspec` block, bullets render in the default body font (Lato) and visually mismatch the rest of the letter.
 
-**`BoldFont = Raleway-Bold` is also mandatory, and leaving it out fails silently.** Raleway-Medium ships no bold face, so `\textbf{Label}:` inside that block renders at *medium weight* — the compile succeeds, the log only carries a font-substitution warning, and every bullet label in the letter comes out unemphasised. Since this file's own Bullet Lists section tells you to use `\textbf{Label:}`, the two instructions would otherwise contradict each other; the `BoldFont` option is what reconciles them. Check a compiled letter's bullet labels are visibly bolder than the body before shipping — the failure is invisible in the source.
+**`BoldFont = Raleway-Bold` is also mandatory, and leaving it out fails silently.** Raleway-Medium ships no bold face, so `\textbf{Label}:` inside that block renders at *medium weight* — the compile succeeds, the log says only `LaTeX Font Warning: Font shape 'TU/Raleway-Medium(0)/b/n' undefined`, and every bullet label in the letter comes out unemphasised. Since this file's own Bullet Lists section tells you to use `\textbf{Label:}`, the two instructions would otherwise contradict each other; the `BoldFont` option is what reconciles them. Check a compiled letter's bullet labels are visibly bolder than the body before shipping — the failure is invisible in the source.
 
 ### Known template pitfall: the signature block reserves four lines
 
-`cover.cls` defines `\closing` as the closing line plus **two hard-coded blank lines** before `\signature`. That is a four-line block, and it is the usual cause of a letter that overflows by exactly one line: the body fits, the signature does not, and page 2 contains nothing but the candidate's name.
+`cover.cls` defines `\closing` as `{#1 \\}\mbox{}\\\mbox{}\\`, i.e. the closing line **plus two hard-coded blank lines** before `\signature`. That is a four-line block, and it is the usual cause of a letter that overflows by exactly one line: the body fits, the signature does not, and page 2 contains nothing but the candidate's name.
 
-Diagnose it before cutting content — if extracting just the second page of the overflowing PDF returns only the signature, the body is not the problem.
+Diagnose it before cutting content — if extracting just the second page of the overflowing PDF (`pdftotext -f 2 -l 2 -enc UTF-8 <file>.pdf -`) returns only the signature, the body is not the problem.
 
-Reach for a smaller closing block **before** cutting a claim. The one-page rule is real, but spending a grounded achievement to buy back a blank line the template did not need is a bad trade. Cut content only once the gap is already down to one line.
+The fix, applied **in the document and not in `cover.cls`**, so other letters keep their current layout - replace the `\closing{...}` line with a closing that reserves one blank line instead of two:
+
+```latex
+\begin{flushright}
+% cover.cls's \closing reserves two blank lines before the signature; one is
+% standard letter spacing and buys the line this letter needed.
+{\raggedright\fontspec[Path = OpenFonts/fonts/raleway/]{Raleway-Medium}\fontsize{11pt}{13pt}\selectfont Kind regards, \\ \mbox{}\\ \normalfont}
+
+\signature{[YOUR_NAME]}
+\end{flushright}
+```
+
+Reach for this smaller closing block **before** cutting a claim. The one-page rule is real, but spending a grounded achievement to buy back a blank line the template did not need is a bad trade. Cut content only once the gap is already down to one line.
 
 ## Document Structure
 

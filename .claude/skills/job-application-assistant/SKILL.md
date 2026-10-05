@@ -5,7 +5,7 @@ description: >
   and preparing for interviews. Triggers on keywords like: job posting, job application, CV,
   cover letter, resume, interview prep, job fit, career, application, apply, ansøgning, stilling
 allowed-tools: Read, Glob, Grep, WebFetch, WebSearch, Bash, Edit, Write, AskUserQuestion
-framework_version: 1.3.4
+framework_version: 1.3.5
 ---
 
 # Job Application Assistant
@@ -22,6 +22,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 - Analyze the posting for required competencies, keywords, and priorities
 - Research the company (website, LinkedIn, mission, recent news), per `09-web-research.md`
 - Score the posting against the candidate's profile using the framework in `04-job-evaluation.md`
+- Once the fit score exists, run the compensation analysis exactly as `/apply` Step 1a describes (the `salary-analyst` agent) - the screening floor it checks is tiered by that score
 - Present the evaluation table and verdict
 - Suggest whether the candidate should call the employer before applying (see `04-job-evaluation.md` for guidance)
 - Ask the user if they want to proceed with an application
@@ -65,6 +66,8 @@ When the user provides a job posting (URL or text), follow this workflow:
 | `07-interview-prep.md` | STAR examples, tough questions, roleplay guidelines |
 | `08-application-forms.md` | Portal free-text fields: self-introduction, project entries, character-limited pitches |
 | `09-web-research.md` | Fetching postings and company pages: trust boundary, the WebFetch 403 fallback, escalation order, claim verification |
+| `10-market-facts.md` | Mexico software compensation reference data with sources and dates: employer tiers, the survey benchmark, payroll vs contractor mechanics, market shape. **Re-derive before quoting a conversion** |
+| `11-methodology.md` | Corrections earned from real failures: the grounding rules, and numbered items cited elsewhere by number |
 
 ---
 

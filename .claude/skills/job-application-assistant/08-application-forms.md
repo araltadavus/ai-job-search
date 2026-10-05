@@ -1,5 +1,5 @@
 ---
-framework_version: 1.1.0
+framework_version: 1.2.0
 ---
 
 # Application Form Fields
@@ -65,6 +65,39 @@ These reward **a specific situation over an adjective**. Most applicants submit 
 4. Present all candidates with counts, recommend one, and say why.
 
 Prefer the version that **maps the candidate's problem onto the employer's problem**, where a truthful mapping exists. That is what "stand out" is actually asking for.
+
+## Field type: salary expectation
+
+**Never fill this field from memory, from the candidate's stated range alone, or from your own sense of
+the market.** It is the one field on the form that can end the application before a human reads a word
+of it: a rejection that arrives minutes after submission, with no time for anyone to have read
+anything, is the signature of a structured-field knockout. *(Even then it is a hypothesis, not proof -
+treat a single fast rejection as one unverified event.)*
+
+**Get the number from the `salary-analyst` agent**, which returns a payroll (nómina) range, a
+contractor (honorarios / B2B) range and a walk-away, each backed by a fetched and quoted source, and
+checked against the candidate's screening floor in `04-job-evaluation.md`. `/apply` Step 1a runs it
+and the figures should already be in hand; if they are not, run it before filling this field.
+
+Four rules govern what goes in the box:
+
+1. **Prefer a range to a single figure whenever the field allows one.** Automated screens compare the
+   **minimum** you state against the requisition's budget, so a range of `120,000-160,000` survives a
+   filter that a flat `160,000` fails, at no cost to the top of the ask. When the field takes only one
+   number, the analyst's confidence rating decides: `HIGH` anchors near the top of the band, `LOW`
+   states the range in an adjacent free-text field or defers.
+2. **Name the structure.** A payroll figure and a contractor figure for the same seat differ
+   materially, and a bare number is ambiguous between them. If the form gives no place to say which,
+   quote the payroll figure and raise the structure in the first call.
+3. **Never state a maximum, and do not volunteer the current salary.** A stated ceiling or a current
+   figure hands the employer the anchor the offer will be built against. When a form makes the current
+   salary required, give the total compensation rather than base, and say so.
+4. **Monthly or annual, gross or net - read the field label twice.** Mexican forms usually mean monthly
+   gross; US and UK forms mean annual. A figure entered against the wrong unit is a knockout that looks
+   like a rejection.
+
+Record the submitted figure and its structure in a `NOTE TO SELF` block. A recruiter call three weeks
+later will ask what was put on the form, and the honest answer has to match.
 
 ## Output format
 
