@@ -27,6 +27,8 @@ salary_data.json
 **/job_scraper/seen_jobs.json
 **/job_scraper/notion_sync.json
 **/job_scraper/*.md
+# Daily seen_jobs backups written by `rank_state.py apply` - same personal data.
+**/job_scraper/*.bak.json
 *_BehavioralReport.pdf
 linkedin_Profile.pdf
 

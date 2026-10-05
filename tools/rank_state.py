@@ -27,19 +27,35 @@ alone, `--all` making a retired entry revivable).
 Nothing here fetches a posting or judges a fit. Scoring stays with the model;
 this only removes the state file from the conversation.
 
+`apply` also enforces Step 4's guards, each of which exists because prose in
+rank.md did not stop the failure it prevents:
+
+  * an all-failed batch (5+ results, every one `expired`/`unknown`) is the
+    signature of fetch throttling, not of that many dead postings - it is
+    refused and nothing is written, unless `--force-expired` says a second
+    spaced attempt confirmed it;
+  * a failed retrieval (`unknown`) never destroys an existing ranking;
+  * a score is never written without the rubric it was produced under
+    (`--rubric`, the `framework_version` in 04-job-evaluation.md);
+  * the store is copied to `seen_jobs.<date>.bak.json` before the first real
+    write of the day.
+
 Usage:
   python3 tools/rank_state.py candidates [--all] [--focus TEXT] [--limit N]
   python3 tools/rank_state.py sweep [--write] [--exclude KEY,KEY]
-  python3 tools/rank_state.py apply --results results.json [--dry-run]
+  python3 tools/rank_state.py apply --results results.json --rubric VERSION
+                                    [--scope-note TEXT] [--force-expired] [--dry-run]
 
-Both subcommands print JSON on stdout. Exit 0 on success, 1 on a usage or
-state error, or on `apply` when any result could not be written.
+Every subcommand prints JSON on stdout. Exit 0 on success, 1 on a usage or
+state error, or on `apply` when any result could not be written; 3 when
+`apply` refuses an all-failed batch (nothing written).
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unicodedata
@@ -57,6 +73,24 @@ BANDS = ((75, "Strong Fit"), (60, "Good Fit"), (45, "Moderate Fit"), (30, "Weak 
 DEFAULT_LIMIT = 10
 URGENT_DAYS = 7
 ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Statuses a run selects by default. `unknown` is a fetch that failed, not a
+# verdict - the question is still open, so the next run asks it again.
+OPEN_STATUSES = ("new", "unknown")
+
+# Result statuses Step 2's scoring agents may return. An absent status is
+# read as "scored" for results written before the field existed.
+RESULT_STATUSES = ("scored", "expired", "unknown")
+
+# Step 2's decision fields, persisted verbatim when a result carries them.
+# Never `location`: on an entry that key is the scraper's place field.
+DECISION_FIELDS = ("visa", "visa_note", "portfolio_required", "still_open", "band", "language")
+
+# Smallest batch the all-failed guard applies to. Measured 28 Aug 2026: 30
+# rapid fetches failed 30/30 while a posting verified live minutes earlier
+# was among them - a throttled client, not 30 dead postings.
+ALL_FAILED_MIN_BATCH = 5
+REFUSED_EXIT = 3
 
 
 def load_state(path: Path) -> tuple[dict, dict]:
@@ -143,7 +177,7 @@ def cmd_candidates(args) -> int:
         if args.all:
             if status == "skipped":
                 continue
-        elif status != "new":
+        elif status not in OPEN_STATUSES:
             continue
         if (norm(entry.get("company")), norm(entry.get("title"))) in excluded:
             skipped_tracker += 1
@@ -256,7 +290,39 @@ def band(score: int) -> str:
     return "Poor Fit"
 
 
+def result_status(result: dict):
+    """A result's status; absent (or null) reads as "scored" for compatibility."""
+    status = result.get("status")
+    return "scored" if status is None else status
+
+
+def all_failed_refusal(results: list) -> dict | None:
+    """Guard: an all-failed batch is a throttling signal, not a finding."""
+    statuses = [result_status(r) if isinstance(r, dict) else None for r in results]
+    expired, unknown = statuses.count("expired"), statuses.count("unknown")
+    if len(results) < ALL_FAILED_MIN_BATCH or expired + unknown != len(results):
+        return None
+    return {
+        "reason": "all_failed_batch",
+        "batch": len(results),
+        "expired": expired,
+        "unknown": unknown,
+        "message": (
+            f"refused: every one of {len(results)} results is expired or unknown. That is the "
+            f"signature of fetch throttling, not of {len(results)} dead postings - on 28 Aug 2026 "
+            "30/30 rapid fetches failed while a posting verified live minutes earlier was among "
+            "them. Writing this batch would mark live roles expired, permanently, and nothing "
+            "re-checks an expired entry. Nothing was written. Back off, retry the slice spaced "
+            "out, and re-run; pass --force-expired only after a second spaced attempt confirmed "
+            "the postings really are gone."
+        ),
+    }
+
+
 def cmd_apply(args) -> int:
+    rubric = args.rubric.strip()
+    if not rubric:
+        sys.exit("--rubric must name the framework_version the scores were produced under")
     doc, seen = load_state(args.state)
     today = args.today
     try:
@@ -268,16 +334,56 @@ def cmd_apply(args) -> int:
     if not isinstance(results, list):
         sys.exit("results file must be a JSON array of scoring objects")
 
-    rows, expired, errors = [], [], []
+    refusal = None if args.force_expired else all_failed_refusal(results)
+    if refusal:
+        print(refusal["message"], file=sys.stderr)
+        print(json.dumps({"refused": refusal, "written": False}, indent=2, ensure_ascii=False))
+        return REFUSED_EXIT
+
+    rows, expired, unknown, errors = [], [], [], []
     for result in results:
+        if not isinstance(result, dict):
+            errors.append({"key": None, "error": "result is not a JSON object"})
+            continue
         key = result.get("key")
         entry = seen.get(key)
         if entry is None:
             errors.append({"key": key, "error": "no such key in seen_jobs.json"})
             continue
 
-        if result.get("status") == "expired":
+        status = result_status(result)
+        if status not in RESULT_STATUSES:
+            errors.append(
+                {"key": key, "error": f"unusable status {status!r} - expected one of {', '.join(RESULT_STATUSES)}"}
+            )
+            continue
+
+        if status == "unknown":
+            # Never destroy a real score with a failed retrieval, and never
+            # promote unknown to expired: the question is still open. The
+            # reverse holds too - a failed fetch adds nothing to a confirmed
+            # expiry, and reopening it would re-fetch a dead posting every run.
+            prior = entry.get("status")
+            kept = prior in ("ranked", "expired")
+            if not kept:
+                entry["status"] = "unknown"
+                entry["last_fetch_failed"] = today.isoformat()
+            unknown.append(
+                {
+                    "key": key,
+                    "title": entry.get("title"),
+                    "company": entry.get("company"),
+                    "url": entry.get("url"),
+                    "kept_status": prior if kept else None,
+                    "kept_existing_score": prior == "ranked",
+                    "rank_score": entry.get("rank_score") if prior == "ranked" else None,
+                }
+            )
+            continue
+
+        if status == "expired":
             entry["status"] = "expired"
+            entry["expired_confirmed"] = today.isoformat()
             expired.append(
                 {"key": key, "title": entry.get("title"), "company": entry.get("company"), "url": entry.get("url")}
             )
@@ -296,6 +402,9 @@ def cmd_apply(args) -> int:
         entry["rank_score"] = score
         entry["rank_verdict"] = band(score)
         entry["rank_date"] = today.isoformat()
+        entry["rubric"] = rubric
+        entry.pop("last_fetch_failed", None)  # this fetch succeeded
+        entry.pop("rank_scope_note", None)  # it was looked at after all
         entry["location_verdict"] = result.get("location_verdict") or legacy or "PASS"
         entry["language_gate"] = result.get("language_gate") or "PASS"
         if entry["language_gate"] == "PASS":
@@ -311,6 +420,9 @@ def cmd_apply(args) -> int:
             value = result.get(field)
             if isinstance(value, list):
                 entry[field] = [str(b) for b in value][:3]
+        for field in DECISION_FIELDS:
+            if field in result:
+                entry[field] = result[field]
 
         parsed = parse_iso(entry.get("deadline"))
         rows.append(
@@ -325,6 +437,8 @@ def cmd_apply(args) -> int:
                 "location_verdict": entry["location_verdict"],
                 "language_gate": entry["language_gate"],
                 "language_note": entry.get("language_note"),
+                "visa": entry.get("visa"),
+                "band": entry.get("band"),
                 "deadline": entry.get("deadline"),
                 "posted_date": entry.get("posted_date"),
                 "urgent": bool(parsed and today <= parsed <= today + timedelta(days=URGENT_DAYS)),
@@ -333,7 +447,23 @@ def cmd_apply(args) -> int:
             }
         )
 
+    # Record what this run deliberately did not rank, so "never looked at"
+    # stays distinguishable from "scored low".
+    if args.scope_note:
+        note = f"{today.isoformat()}: {args.scope_note}"
+        for entry in seen.values():
+            if entry.get("status") == "new":
+                entry["rank_scope_note"] = note
+
+    stale_rubric = sum(
+        1 for entry in seen.values() if entry.get("status") == "ranked" and entry.get("rubric") != rubric
+    )
+
+    backup = None
     if not args.dry_run:
+        backup = args.state.with_name(f"{args.state.stem}.{today.isoformat()}.bak.json")
+        if not backup.exists():
+            shutil.copy2(args.state, backup)  # the store as it was before the day's first write
         save_state(args.state, doc)
 
     rows.sort(key=lambda r: (r["score"], r["urgent"]), reverse=True)
@@ -346,8 +476,12 @@ def cmd_apply(args) -> int:
                 "ranked": ranked,
                 "vetoed": vetoed,
                 "expired": expired,
+                "unknown": unknown,
                 "errors": errors,
+                "rubric": rubric,
+                "stale_rubric": stale_rubric,
                 "written": not args.dry_run,
+                "backup": backup.name if backup else None,
             },
             indent=2,
             ensure_ascii=False,
@@ -392,6 +526,15 @@ def main() -> int:
 
     app = sub.add_parser("apply", parents=[common], help="write scoring results back and print the ranking")
     app.add_argument("--results", required=True, help="JSON array from the scoring agents")
+    app.add_argument(
+        "--rubric", required=True, help="framework_version from 04-job-evaluation.md; stamped on every ranked entry"
+    )
+    app.add_argument("--scope-note", help="what this run deliberately did not rank, and why")
+    app.add_argument(
+        "--force-expired",
+        action="store_true",
+        help="override the all-failed-batch guard - only after a second, spaced attempt confirmed the postings are gone",
+    )
     app.add_argument("--dry-run", action="store_true")
     app.set_defaults(func=cmd_apply)
 

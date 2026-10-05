@@ -71,6 +71,8 @@ REQUIRED_IGNORE_RULES = [
     "**/job_scraper/seen_jobs.json",
     "**/job_scraper/notion_sync.json",
     "**/job_scraper/*.md",
+    # rank_state.py apply's pre-write backups: a full copy of the state file.
+    "**/job_scraper/*.bak.json",
     "*_BehavioralReport.pdf",
     "linkedin_Profile.pdf",
     "cv/main_*.*",

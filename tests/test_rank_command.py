@@ -645,6 +645,44 @@ class RankStateToolSpec(unittest.TestCase):
             "Step 4 must still state that job_search_tracker.csv is read-only for /rank",
         )
 
+    def test_step2_lets_an_agent_say_unknown_rather_than_expired(self):
+        """A throttled fetch is indistinguishable from a dead posting, so the
+        agent contract must carry a third status - or every failed retrieval
+        is written as a permanent `expired`."""
+        step2 = self.sections.get("Step 2: Batch-Fetch and Score", "")
+        block = step2.split("```json", 1)[1].split("```", 1)[0]
+        self.assertIn('"status": "scored" | "expired" | "unknown"', block)
+        self.assertNotIn(
+            '"retrieval genuinely failed after retrying"',
+            step2,
+            "`expired` must mean confirmed gone; a retrieval that failed is `unknown`",
+        )
+
+    def test_step1_re_selects_unknown_entries(self):
+        step1 = self.sections.get("Step 1: Load State", "")
+        self.assertIn(
+            "`new` or `unknown`",
+            step1,
+            "a failed fetch is an open question - the default run must ask it again",
+        )
+
+    def test_step4_apply_always_carries_a_rubric(self):
+        step4 = self.sections.get("Step 4: Update State", "")
+        invocations = [line for line in step4.splitlines() if "rank_state.py apply" in line]
+        self.assertTrue(invocations, "Step 4 must show the apply invocation")
+        for line in invocations:
+            self.assertIn("--rubric", line, f"every apply example must pass --rubric: {line!r}")
+        for guard in ("--force-expired", "--scope-note", "stale_rubric", ".bak.json"):
+            self.assertIn(guard, step4, f"Step 4 must document {guard}")
+
+    def test_backups_are_ignored_by_git(self):
+        gitignore = (REPO / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn(
+            "**/job_scraper/*.bak.json",
+            gitignore,
+            "apply's daily seen_jobs backup is the same personal data as seen_jobs.json",
+        )
+
     def test_settings_and_guards_allow_the_new_tool(self):
         settings = json.loads((REPO / ".claude" / "settings.json").read_text(encoding="utf-8"))
         allow = settings["permissions"]["allow"]

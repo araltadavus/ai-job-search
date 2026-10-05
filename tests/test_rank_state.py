@@ -22,6 +22,9 @@ REPO = Path(__file__).resolve().parent.parent
 TOOL = REPO / "tools" / "rank_state.py"
 
 TODAY = "2026-09-03"
+RUBRIC = "1.2.7"
+BACKUP_NAME = f"seen_jobs.{TODAY}.bak.json"
+FIFTY = {"technical": 50, "experience": 50, "behavioral": 50, "career": 50}
 
 
 def entry(**over):
@@ -48,13 +51,16 @@ class RankStateCase(unittest.TestCase):
     def write_state(self, seen):
         self.state.write_text(json.dumps({"seen": seen}), encoding="utf-8")
 
-    def run_tool(self, *args, expect=0):
-        proc = subprocess.run(
+    def run_raw(self, *args):
+        return subprocess.run(
             [sys.executable, str(TOOL), *args, "--state", str(self.state), "--today", TODAY],
             capture_output=True,
             text=True,
             encoding="utf-8",
         )
+
+    def run_tool(self, *args, expect=0):
+        proc = self.run_raw(*args)
         self.assertEqual(proc.returncode, expect, proc.stderr)
         return json.loads(proc.stdout)
 
@@ -182,6 +188,21 @@ class Candidates(RankStateCase):
         out = self.run_tool("candidates", "--all", "--tracker", str(self.tmp / "n.csv"))
         self.assertEqual(sorted(row["key"] for row in out["selected"]), ["a", "b", "d"])
 
+    def test_unknown_entries_are_re_eligible_without_all(self):
+        """A failed fetch is an open question, not a verdict: an `unknown` entry
+        must come back on the next default run, or one throttled batch parks
+        live postings where only `--all` would ever look at them again."""
+        self.write_state(
+            {
+                "n": entry(),
+                "u": entry(status="unknown", last_fetch_failed="2026-09-01"),
+                "r": entry(status="ranked", rank_score=70),
+                "x": entry(status="expired"),
+            }
+        )
+        out = self.run_tool("candidates", "--tracker", str(self.tmp / "none.csv"))
+        self.assertEqual(sorted(row["key"] for row in out["selected"]), ["n", "u"])
+
     def test_missing_state_file_exits_nonzero(self):
         proc = subprocess.run(
             [sys.executable, str(TOOL), "candidates", "--state", str(self.tmp / "nope.json"),
@@ -263,6 +284,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         out = self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -292,7 +315,7 @@ class Apply(RankStateCase):
 
     def test_expired_status_is_written_through(self):
         self.write_state({"a": entry()})
-        out = self.run_tool("apply", "--results", self.results([{"key": "a", "status": "expired"}]))
+        out = self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results([{"key": "a", "status": "expired"}]))
         self.assertEqual(self.read_state()["a"]["status"], "expired")
         self.assertEqual([r["key"] for r in out["expired"]], ["a"])
 
@@ -303,6 +326,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(deadline="2026-10-01")})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -321,6 +346,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(location="FLAG")})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -340,6 +367,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(location="Athens, Greece")})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -359,6 +388,8 @@ class Apply(RankStateCase):
         scores = {"technical": 90, "experience": 90, "behavioral": 90, "career": 90}
         out = self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -378,6 +409,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(language_note="stale note from a prior run")})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -396,6 +429,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -421,6 +456,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(status="ranked", strengths=["old strength"], gaps=["old gap"])})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [
@@ -441,7 +478,7 @@ class Apply(RankStateCase):
     def test_unknown_key_is_an_error_not_a_silent_drop(self):
         self.write_state({"a": entry()})
         out = self.run_tool(
-            "apply", "--results", self.results([{"key": "ghost", "status": "scored", "scores": {}}]), expect=1
+            "apply", "--rubric", RUBRIC, "--results", self.results([{"key": "ghost", "status": "scored", "scores": {}}]), expect=1
         )
         self.assertEqual(out["errors"][0]["key"], "ghost")
 
@@ -449,6 +486,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         out = self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results([{"key": "a", "status": "scored", "scores": {"technical": 80}}]),
             expect=1,
@@ -460,6 +499,8 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         self.run_tool(
             "apply",
+            "--rubric",
+            RUBRIC,
             "--results",
             self.results(
                 [{"key": "a", "status": "scored",
@@ -480,7 +521,7 @@ class Apply(RankStateCase):
                     scores = dict.fromkeys(dimensions, 50)
                     scores[dimension] = value
                     out = self.run_tool(
-                        "apply", "--results", self.results([
+                        "apply", "--rubric", RUBRIC, "--results", self.results([
                             {"key": "a", "status": "scored", "scores": scores},
                             {"key": "b", "status": "scored", "scores": dict.fromkeys(dimensions, 80)},
                         ]), expect=1,
@@ -496,7 +537,7 @@ class Apply(RankStateCase):
         for value, expected in ((0, 0), (100, 100), (72.5, 73)):
             with self.subTest(value=value):
                 self.write_state({"a": entry()})
-                out = self.run_tool("apply", "--results", self.results([
+                out = self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results([
                     {"key": "a", "status": "scored", "scores": dict.fromkeys(
                         ("technical", "experience", "behavioral", "career"), value)},
                 ]))
@@ -510,12 +551,291 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(status="ranked", rank_score=40, strengths=["old"])})
         scores = {"technical": 90, "experience": 90, "behavioral": 90, "career": 90}
         self.run_tool(
-            "apply", "--results",
+            "apply", "--rubric", RUBRIC, "--results",
             self.results([{"key": "a", "status": "scored", "scores": scores, "strengths": ["new"]}]),
         )
         stored = self.read_state()["a"]
         self.assertEqual(stored["rank_score"], 90)
         self.assertEqual(stored["strengths"], ["new"])
+
+
+class ApplyGuards(RankStateCase):
+    """The write-back guards the fork's own merge tool carried, now in `apply`.
+
+    Each one exists because prose in rank.md did not stop the failure it
+    guards against: a throttled batch read as dead postings, a failed fetch
+    erasing a real score, scores from two rubric generations interleaved with
+    nothing on disk to tell them apart, and 285 postings skipped by judgement
+    with no record that anyone chose to skip them.
+    """
+
+    def results(self, payload):
+        path = self.tmp / "results.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def apply(self, payload, *extra, expect=0):
+        return self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results(payload), *extra, expect=expect)
+
+    def scored(self, key, **over):
+        result = {"key": key, "status": "scored", "scores": dict(FIFTY)}
+        result.update(over)
+        return result
+
+    # --- rubric -----------------------------------------------------------
+
+    def test_rubric_is_required(self):
+        self.write_state({"a": entry()})
+        before = self.state.read_bytes()
+        proc = self.run_raw("apply", "--results", self.results([self.scored("a")]))
+        self.assertNotEqual(proc.returncode, 0, "a score without a rubric must be refused, not written")
+        self.assertIn("--rubric", proc.stderr)
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_blank_rubric_is_refused(self):
+        self.write_state({"a": entry()})
+        before = self.state.read_bytes()
+        proc = self.run_raw("apply", "--rubric", "  ", "--results", self.results([self.scored("a")]))
+        self.assertNotEqual(proc.returncode, 0, "a blank stamp is no stamp")
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_rubric_is_stamped_on_every_entry_ranked_this_run(self):
+        self.write_state({"a": entry(), "b": entry(status="ranked", rank_score=60, rubric="old"), "c": entry()})
+        self.apply([self.scored("a"), self.scored("b"), {"key": "c", "status": "expired"}])
+        stored = self.read_state()
+        self.assertEqual(stored["a"]["rubric"], RUBRIC)
+        self.assertEqual(stored["b"]["rubric"], RUBRIC, "a re-score replaces the old generation's stamp")
+        self.assertNotIn("rubric", stored["c"], "only a score carries a rubric")
+
+    def test_stale_rubric_counts_ranked_entries_on_another_or_no_rubric(self):
+        self.write_state(
+            {
+                "old": entry(status="ranked", rank_score=70, rubric="1.0.0"),
+                "none": entry(status="ranked", rank_score=70),
+                "current": entry(status="ranked", rank_score=70, rubric=RUBRIC),
+                "expired_old": entry(status="expired", rubric="1.0.0"),
+                "fresh": entry(),
+            }
+        )
+        out = self.apply([self.scored("fresh")])
+        self.assertEqual(
+            out["stale_rubric"],
+            2,
+            "both the other-generation entry and the unstamped one are not comparable to this run's scores; "
+            "only ranked entries count",
+        )
+
+    # --- status vocabulary -------------------------------------------------
+
+    def test_absent_status_is_treated_as_scored(self):
+        self.write_state({"a": entry()})
+        out = self.apply([{"key": "a", "scores": dict(FIFTY)}])
+        self.assertEqual(self.read_state()["a"]["status"], "ranked")
+        self.assertEqual([r["key"] for r in out["ranked"]], ["a"])
+
+    def test_unrecognised_status_is_an_error_for_that_result_only(self):
+        self.write_state({"a": entry(), "b": entry()})
+        out = self.apply(
+            [{"key": "a", "status": "pending", "scores": dict(FIFTY)}, self.scored("b")],
+            expect=1,
+        )
+        self.assertEqual([e["key"] for e in out["errors"]], ["a"])
+        self.assertIn("pending", out["errors"][0]["error"])
+        self.assertEqual(self.read_state()["a"], entry(), "a malformed result never touches its entry")
+        self.assertEqual(self.read_state()["b"]["status"], "ranked")
+
+    # --- unknown / expired ----------------------------------------------------
+
+    def test_unknown_on_an_unranked_entry_records_the_failed_fetch(self):
+        self.write_state({"a": entry()})
+        out = self.apply([{"key": "a", "status": "unknown"}])
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "unknown")
+        self.assertEqual(stored["last_fetch_failed"], TODAY)
+        self.assertEqual(out["expired"], [], "unknown is never promoted to expired")
+        self.assertEqual(len(out["unknown"]), 1)
+        self.assertEqual(out["unknown"][0]["key"], "a")
+        self.assertFalse(out["unknown"][0]["kept_existing_score"])
+        self.assertEqual(out["unknown"][0]["url"], "https://example.com/job")
+
+    def test_unknown_never_destroys_an_existing_ranking(self):
+        ranked = entry(status="ranked", rank_score=81, rank_verdict="Strong Fit", rubric="1.0.0",
+                       strengths=["keep me"], visa="OPEN")
+        self.write_state({"a": ranked})
+        out = self.apply([{"key": "a", "status": "unknown", "still_open": "unknown"}])
+        self.assertEqual(self.read_state()["a"], ranked, "every field of a ranked entry survives a failed fetch")
+        self.assertTrue(out["unknown"][0]["kept_existing_score"])
+        self.assertEqual(out["unknown"][0]["rank_score"], 81)
+
+    def test_unknown_never_reopens_a_confirmed_expiry(self):
+        dead = entry(status="expired", expired_confirmed="2026-09-01")
+        self.write_state({"a": dead})
+        out = self.apply([{"key": "a", "status": "unknown"}])
+        self.assertEqual(self.read_state()["a"], dead, "a failed fetch adds nothing to a confirmed expiry")
+        self.assertEqual(out["unknown"][0]["kept_status"], "expired")
+        self.assertFalse(out["unknown"][0]["kept_existing_score"])
+
+    def test_a_later_successful_score_clears_the_failed_fetch_marker(self):
+        self.write_state({"a": entry(status="unknown", last_fetch_failed="2026-09-01")})
+        self.apply([self.scored("a")])
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "ranked")
+        self.assertNotIn("last_fetch_failed", stored, "the question the marker recorded is now answered")
+
+    def test_expired_records_the_confirmation_date(self):
+        self.write_state({"a": entry()})
+        self.apply([{"key": "a", "status": "expired"}])
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "expired")
+        self.assertEqual(stored["expired_confirmed"], TODAY)
+
+    # --- all-failed batch guard ---------------------------------------------
+
+    def _all_failed_batch(self):
+        keys = [f"k{i}" for i in range(5)]
+        self.write_state({k: entry(title=f"Role {k}") for k in keys})
+        return [{"key": k, "status": "expired" if i % 2 else "unknown"} for i, k in enumerate(keys)]
+
+    def test_all_failed_batch_is_refused_and_nothing_is_written(self):
+        """Measured 28 Aug 2026: 30/30 fetches failed, a posting verified live
+        minutes earlier among them. Written, that batch marks live roles
+        expired permanently."""
+        payload = self._all_failed_batch()
+        before = self.state.read_bytes()
+        proc = self.run_raw("apply", "--rubric", RUBRIC, "--results", self.results(payload))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotEqual(proc.returncode, 1, "a refusal is distinguishable from a per-result error")
+        self.assertEqual(self.state.read_bytes(), before, "nothing may be written")
+        self.assertFalse((self.tmp / BACKUP_NAME).exists(), "a refused run makes no backup either")
+        out = json.loads(proc.stdout)
+        self.assertFalse(out["written"])
+        self.assertIn("throttl", out["refused"]["message"])
+        self.assertIn("--force-expired", out["refused"]["message"])
+        self.assertIn("throttl", proc.stderr)
+
+    def test_all_failed_batch_is_refused_on_dry_run_too(self):
+        payload = self._all_failed_batch()
+        proc = self.run_raw("apply", "--rubric", RUBRIC, "--results", self.results(payload), "--dry-run")
+        self.assertNotEqual(proc.returncode, 0, "the inspection pass must show the refusal the real run would hit")
+
+    def test_force_expired_overrides_the_guard(self):
+        payload = self._all_failed_batch()
+        out = self.apply(payload, "--force-expired")
+        self.assertTrue(out["written"])
+        stored = self.read_state()
+        self.assertEqual(stored["k1"]["status"], "expired")
+        self.assertEqual(stored["k0"]["status"], "unknown")
+
+    def test_guard_needs_a_batch_of_five(self):
+        self.write_state({f"k{i}": entry() for i in range(4)})
+        out = self.apply([{"key": f"k{i}", "status": "expired"} for i in range(4)])
+        self.assertTrue(out["written"])
+        self.assertEqual(len(out["expired"]), 4)
+
+    def test_one_success_disarms_the_guard(self):
+        self.write_state({f"k{i}": entry() for i in range(6)})
+        payload = [{"key": f"k{i}", "status": "expired"} for i in range(5)] + [self.scored("k5")]
+        out = self.apply(payload)
+        self.assertTrue(out["written"])
+        self.assertEqual(self.read_state()["k5"]["status"], "ranked")
+
+    # --- backup ----------------------------------------------------------------
+
+    def test_first_write_of_the_day_backs_up_the_store(self):
+        self.write_state({"a": entry()})
+        before = self.state.read_bytes()
+        self.apply([self.scored("a")])
+        backup = self.tmp / BACKUP_NAME
+        self.assertTrue(backup.is_file())
+        self.assertEqual(backup.read_bytes(), before, "the backup is the store as it was before this write")
+
+    def test_an_existing_backup_is_never_overwritten(self):
+        self.write_state({"a": entry(), "b": entry()})
+        backup = self.tmp / BACKUP_NAME
+        backup.write_text("earliest state of the day", encoding="utf-8")
+        self.apply([self.scored("a")])
+        self.apply([self.scored("b")])
+        self.assertEqual(backup.read_text(encoding="utf-8"), "earliest state of the day")
+
+    def test_dry_run_makes_no_backup(self):
+        self.write_state({"a": entry()})
+        self.apply([self.scored("a")], "--dry-run")
+        self.assertFalse((self.tmp / BACKUP_NAME).exists())
+
+    # --- scope note ---------------------------------------------------------------
+
+    def test_scope_note_marks_what_was_left_unranked_and_clears_what_was_ranked(self):
+        self.write_state(
+            {
+                "ranked_now": entry(rank_scope_note="2026-08-28: older note"),
+                "left_new": entry(),
+                "ranked_before": entry(status="ranked", rank_score=70),
+                "skipped": entry(status="skipped"),
+            }
+        )
+        self.apply([self.scored("ranked_now")], "--scope-note", "only remote roles; 3 international skipped")
+        stored = self.read_state()
+        self.assertNotIn("rank_scope_note", stored["ranked_now"])
+        self.assertEqual(stored["left_new"]["rank_scope_note"], f"{TODAY}: only remote roles; 3 international skipped")
+        self.assertNotIn("rank_scope_note", stored["ranked_before"])
+        self.assertNotIn("rank_scope_note", stored["skipped"])
+
+    def test_without_scope_note_nothing_is_marked(self):
+        self.write_state({"a": entry(), "b": entry()})
+        self.apply([self.scored("a")])
+        self.assertNotIn("rank_scope_note", self.read_state()["b"])
+
+    def test_ranking_clears_an_old_scope_note_even_without_a_new_one(self):
+        """A note says "deliberately not ranked". Once the entry is ranked that
+        is false, whether or not this run was itself scoped."""
+        old_note = "2026-08-28: international skipped"
+        self.write_state({"a": entry(rank_scope_note=old_note), "b": entry(rank_scope_note=old_note)})
+        self.apply([self.scored("a")])
+        stored = self.read_state()
+        self.assertNotIn("rank_scope_note", stored["a"])
+        self.assertEqual(stored["b"]["rank_scope_note"], old_note, "an unscoped run leaves the previous record alone")
+
+    # --- decision fields --------------------------------------------------------
+
+    def test_decision_fields_are_copied_verbatim_and_reported(self):
+        self.write_state({"a": entry()})
+        out = self.apply(
+            [
+                self.scored(
+                    "a",
+                    visa="CLOSED",
+                    visa_note="\"We are unable to sponsor visas for this role.\"",
+                    portfolio_required=False,
+                    still_open=True,
+                    band="MXN 50,000-65,000 / month",
+                    language="es",
+                )
+            ]
+        )
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["visa"], "CLOSED")
+        self.assertEqual(stored["visa_note"], "\"We are unable to sponsor visas for this role.\"")
+        self.assertIs(stored["portfolio_required"], False)
+        self.assertIs(stored["still_open"], True)
+        self.assertEqual(stored["band"], "MXN 50,000-65,000 / month")
+        self.assertEqual(stored["language"], "es")
+        row = out["ranked"][0]
+        self.assertEqual(row["visa"], "CLOSED", "Step 5's table has a Visa column")
+        self.assertEqual(row["band"], "MXN 50,000-65,000 / month", "Step 5's table has a Band column")
+
+    def test_absent_decision_fields_are_left_alone(self):
+        self.write_state({"a": entry(visa="OPEN", band="EUR 70k")})
+        self.apply([self.scored("a")])
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["visa"], "OPEN")
+        self.assertEqual(stored["band"], "EUR 70k")
+
+    def test_a_results_location_never_overwrites_the_scrapers_place(self):
+        self.write_state({"a": entry(location="Aarhus, Denmark")})
+        self.apply([self.scored("a", location="PASS", location_verdict="PASS")])
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["location"], "Aarhus, Denmark")
+        self.assertEqual(stored["location_verdict"], "PASS")
 
 
 if __name__ == "__main__":

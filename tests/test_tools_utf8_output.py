@@ -81,6 +81,7 @@ class ToolsWriteUtf8(unittest.TestCase):
         }]), encoding="utf-8")
         proc = run_legacy_stdout([
             TOOLS / "rank_state.py", "apply", "--results", results, "--state", state, "--today", "2026-09-21",
+            "--rubric", "1.0.0",
         ])
         out = json.loads(self.assert_clean_utf8(proc, 0, CJK))
         self.assertEqual([row["key"] for row in out["ranked"]], ["a"])
