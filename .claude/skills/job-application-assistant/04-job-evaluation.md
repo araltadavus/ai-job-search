@@ -1,5 +1,5 @@
 ---
-framework_version: 1.2.8
+framework_version: 1.2.9
 ---
 
 # Job Evaluation Framework
@@ -149,8 +149,11 @@ scoring rather than folding it into the Technical Skills number.
 The primary compensation step is the `salary-analyst` agent (`/apply` Step 1a), which classifies the employer's tier, checks the candidate's screening floor and sizes the ask - see **Compensation Framework** below. The salary index lookup in this section is one optional extra data point for it.
 
 If the salary lookup tool is configured (`salary_data.json` exists), look up the company:
+
+> **Windows:** run these tools as `python`, not `python3`. A python.org install ships no `python3`, so that name reaches the Microsoft Store alias, which either exits 49 with no output (#669) or starts a separate Store Python without the packages `pip` installed (such as pypdf). `.claude/settings.json` allows both spellings.
+
 ```
-python salary_lookup.py "<Company Name>" --json
+python3 salary_lookup.py "<Company Name>" --json
 ```
 
 If a city is known from the posting, add `--city "<City>"` to narrow results.

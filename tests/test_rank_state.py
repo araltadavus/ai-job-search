@@ -51,16 +51,23 @@ class RankStateCase(unittest.TestCase):
     def write_state(self, seen):
         self.state.write_text(json.dumps({"seen": seen}), encoding="utf-8")
 
-    def run_raw(self, *args):
+    def run_raw(self, *args, today=TODAY, now=None):
+        clock = ["--now", now] if now else []
         return subprocess.run(
-            [sys.executable, str(TOOL), *args, "--state", str(self.state), "--today", TODAY],
+            [sys.executable, str(TOOL), *args, "--state", str(self.state), "--today", today, *clock],
             capture_output=True,
             text=True,
             encoding="utf-8",
         )
 
-    def run_tool(self, *args, expect=0):
-        proc = self.run_raw(*args)
+    def run_tool(self, *args, expect=0, today=TODAY, now=None):
+        """Run a subcommand and parse its JSON. `apply` gets `--rubric RUBRIC`
+        unless the call names one: the flag is required, and the tests that are
+        not about the rubric should not each have to repeat it. Tests that need
+        `apply` without it call `run_raw`."""
+        if args and args[0] == "apply" and "--rubric" not in args:
+            args = (args[0], "--rubric", RUBRIC, *args[1:])
+        proc = self.run_raw(*args, today=today, now=now)
         self.assertEqual(proc.returncode, expect, proc.stderr)
         return json.loads(proc.stdout)
 
@@ -165,6 +172,19 @@ class Candidates(RankStateCase):
                 )
                 self.assertEqual(out["excluded_by_tracker"], int(excluded))
 
+    def test_tracker_saved_in_a_legacy_code_page_is_reported_not_a_traceback(self):
+        # A spreadsheet's plain "CSV" save on Windows writes cp1252, not UTF-8.
+        self.write_state({"a": entry()})
+        tracker = self.tmp / "tracker.csv"
+        tracker.write_bytes("date,company,role\r\n2026-08-01,Ørsted,SOC Analyst\r\n".encode("cp1252"))
+        proc = subprocess.run(
+            [sys.executable, str(TOOL), "candidates", "--state", str(self.state), "--tracker", str(tracker)],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("is not UTF-8 text - re-save it as CSV UTF-8", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_focus_filters_on_title_company_and_stored_fit_notes(self):
         self.write_state(
             {
@@ -188,20 +208,22 @@ class Candidates(RankStateCase):
         out = self.run_tool("candidates", "--all", "--tracker", str(self.tmp / "n.csv"))
         self.assertEqual(sorted(row["key"] for row in out["selected"]), ["a", "b", "d"])
 
-    def test_unknown_entries_are_re_eligible_without_all(self):
-        """A failed fetch is an open question, not a verdict: an `unknown` entry
-        must come back on the next default run, or one throttled batch parks
-        live postings where only `--all` would ever look at them again."""
+    def test_legacy_unknown_entries_are_still_re_eligible_without_all(self):
+        """`unknown` is this fork's pre-merge name for `unreachable`. A failed
+        fetch is an open question, not a verdict: an entry stored under either
+        name must come back on the next default run, or one throttled batch
+        parks live postings where only `--all` would ever look at them again."""
         self.write_state(
             {
                 "n": entry(),
                 "u": entry(status="unknown", last_fetch_failed="2026-09-01"),
+                "w": entry(status="unreachable", fetch_attempts=1, first_unreachable="2026-09-02T09:00:00Z"),
                 "r": entry(status="ranked", rank_score=70),
                 "x": entry(status="expired"),
             }
         )
         out = self.run_tool("candidates", "--tracker", str(self.tmp / "none.csv"))
-        self.assertEqual(sorted(row["key"] for row in out["selected"]), ["n", "u"])
+        self.assertEqual(sorted(row["key"] for row in out["selected"]), ["n", "u", "w"])
 
     def test_missing_state_file_exits_nonzero(self):
         proc = subprocess.run(
@@ -266,6 +288,19 @@ class Sweep(RankStateCase):
         self.assertEqual(out["swept"], 1)
         self.assertEqual(self.read_state()["new_past"]["status"], "new")
 
+    def test_excluded_keys_tolerate_spaces_after_commas(self):
+        self.write_state(
+            {
+                "a": entry(status="ranked", deadline="2026-09-01"),
+                "b": entry(status="ranked", deadline="2026-09-01"),
+                "other": entry(status="ranked", deadline="2026-09-01"),
+            }
+        )
+        out = self.run_tool("sweep", "--write", "--exclude", "a, b")
+        self.assertEqual([r["key"] for r in out["newly_expired"]], ["other"])
+        self.assertEqual(out["swept"], 1)
+        self.assertEqual(self.read_state()["b"]["status"], "ranked", "a key scored this run is never swept")
+
     def test_without_write_nothing_is_persisted(self):
         self.write_state({"past": entry(status="ranked", deadline="2026-09-01")})
         out = self.run_tool("sweep")
@@ -280,12 +315,142 @@ class Apply(RankStateCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return str(path)
 
+    def _scored(self, **extra):
+        base = {"key": "a", "status": "scored", "deadline": None,
+                "scores": {d: 80 for d in ("technical", "experience", "behavioral", "career")},
+                "location_verdict": "PASS", "language_gate": "PASS", "language": "en",
+                "strengths": ["s"], "gaps": ["g"]}
+        base.update(extra)
+        return base
+
+    def test_apply_persists_guard_verdict(self):
+        # The scoring agent runs tools/posting_guard.py on each fetched body and
+        # returns the verdict line as `guard`; it is stored additively and echoed
+        # in the rows so Step 5 can show a ⚠ marker without re-reading state.
+        verdict = "posting_guard: ⚠ 1 instruction-like line - review before continuing (1 hidden block removed)"
+        stored = "⚠ 1 instruction-like line - review before continuing (1 hidden block removed)"
+        self.write_state({"a": entry(status="new"), "b": entry(status="new")})
+        out = self.run_tool("apply", "--results", self.results([
+            self._scored(guard=verdict),
+            self._scored(key="b", guard="clean", location_verdict="FAIL"),
+        ]))
+        self.assertEqual(self.read_state()["a"]["guard"], stored)
+        self.assertEqual(out["ranked"][0]["guard"], stored)
+        self.assertEqual(self.read_state()["b"]["guard"], "clean")
+        self.assertEqual(out["vetoed"][0]["guard"], "clean")
+
+    def test_apply_without_guard_key_unchanged(self):
+        # An agent on the old prompt returns no `guard`: nothing is written and
+        # the row carries None, exactly as before the field existed.
+        self.write_state({"a": entry(status="new")})
+        out = self.run_tool("apply", "--results", self.results([self._scored()]))
+        self.assertNotIn("guard", self.read_state()["a"])
+        self.assertIsNone(out["ranked"][0]["guard"])
+
+    def test_apply_normalises_the_guard_verdict(self):
+        # The agent may return the gate's first line verbatim; the stored value
+        # is "clean" for any clean verdict (with or without the context
+        # parenthetical) and the ⚠ text without the "posting_guard:" prefix
+        # otherwise, so Step 5's "anything other than clean" rule holds.
+        self.write_state({k: entry(status="new") for k in "abc"})
+        out = self.run_tool("apply", "--results", self.results([
+            self._scored(key="a", guard="posting_guard: clean"),
+            self._scored(key="b", guard="posting_guard: clean (8 hidden blocks removed, none instruction-like)"),
+            self._scored(key="c", guard="posting_guard: ⚠ 1 instruction-like line - review before continuing"),
+        ]))
+        state = self.read_state()
+        self.assertEqual(state["a"]["guard"], "clean")
+        self.assertEqual(state["b"]["guard"], "clean")
+        self.assertEqual(state["c"]["guard"], "⚠ 1 instruction-like line - review before continuing")
+        self.assertEqual([row["guard"] for row in out["ranked"]], ["clean", "clean", "⚠ 1 instruction-like line - review before continuing"])
+
+    def test_apply_drops_a_stale_guard_when_rescored_without_one(self):
+        self.write_state({"a": entry(status="ranked", guard="⚠ old", rank_score=50, rank_date="2026-08-01")})
+        out = self.run_tool("apply", "--results", self.results([self._scored()]))
+        self.assertNotIn("guard", self.read_state()["a"])
+        self.assertIsNone(out["ranked"][0]["guard"])
+
+    def test_apply_truncates_and_rejects_non_string_guard(self):
+        self.write_state({"a": entry(status="new"), "b": entry(status="new")})
+        out = self.run_tool("apply", "--results", self.results([
+            self._scored(guard="x" * 500),
+            self._scored(key="b", guard={"not": "a string"}),
+        ]))
+        self.assertEqual(len(self.read_state()["a"]["guard"]), 200)
+        self.assertNotIn("guard", self.read_state()["b"])
+        self.assertIsNone(out["ranked"][1]["guard"])
+
+    def test_scored_keys_keep_past_deadlines_out_of_the_shortlist(self):
+        for status in ("new", "ranked", "expired"):
+            with self.subTest(status=status):
+                original = entry(status=status, deadline="2026-09-02")
+                if status != "new":
+                    original.update(rank_score=61, rank_date="2026-08-31", strengths=["stored strength"])
+                self.write_state({"a": original})
+                args = ["candidates", "--tracker", str(self.tmp / "none.csv")]
+                if status != "new":
+                    args.append("--all")
+                selected = self.run_tool(*args)["selected"]
+                self.assertEqual([row["key"] for row in selected], ["a"])
+                result = {"key": "a", "status": "scored", "deadline": None,
+                          "scores": {dimension: 80 for dimension in ("technical", "experience", "behavioral", "career")},
+                          "location_verdict": "PASS", "language_gate": "PASS", "language": "en",
+                          "strengths": ["fresh strength"], "gaps": []}
+                out = self.run_tool("apply", "--results", self.results([result]))
+                self.assertEqual(out["ranked"], [])
+                self.assertEqual(out["vetoed"], [])
+                self.assertEqual([row["key"] for row in out["expired"]], ["a"])
+                self.assertEqual(self.read_state()["a"], dict(original, status="expired"))
+                swept = self.run_tool("sweep", "--write", "--exclude", "a")
+                self.assertEqual(swept["swept"], 0)
+                self.assertEqual(self.read_state()["a"]["status"], "expired")
+
+    def test_deadline_apply_boundaries_and_dry_run_keep_existing_semantics(self):
+        cases = [
+            (TODAY, None, "scored", "ranked"),
+            ("2026-09-04", None, "scored", "ranked"),
+            ("ASAP", None, "scored", "ranked"),
+            (None, None, "scored", "ranked"),
+            ("2026-09-02", "2026-09-04", "scored", "ranked"),
+            (None, None, "expired", "expired"),
+            ("2026-09-02", None, "scored", "expired"),
+        ]
+        for stored, fresh, status, expected in cases:
+            with self.subTest(stored=stored, fresh=fresh, status=status):
+                self.write_state({"a": entry(deadline=stored)})
+                before = self.state.read_bytes()
+                result = {"key": "a", "status": status, "deadline": fresh,
+                          "scores": {dimension: 80 for dimension in ("technical", "experience", "behavioral", "career")}}
+                path = self.results([result])
+                dry = self.run_tool("apply", "--results", path, "--dry-run")
+                self.assertFalse(dry["written"])
+                self.assertEqual(self.state.read_bytes(), before)
+                self.assertEqual([row["key"] for row in dry[expected]], ["a"])
+                out = self.run_tool("apply", "--results", path)
+                self.assertEqual([row["key"] for row in out[expected]], ["a"])
+                self.assertEqual(self.read_state()["a"]["status"], expected)
+                self.assertEqual(self.read_state()["a"]["deadline"], fresh or stored)
+
+    def test_past_deadline_does_not_bypass_scoring_errors(self):
+        for result in ({"key": "a", "status": "scored", "scores": {"technical": 80}},
+                       {"key": "missing", "status": "scored", "scores": {}}):
+            with self.subTest(result=result):
+                original = entry(deadline="2026-09-02")
+                self.write_state({"a": original})
+                before = self.state.read_bytes()
+                path = self.results([result])
+                dry = self.run_tool("apply", "--results", path, "--dry-run", expect=1)
+                self.assertEqual(len(dry["errors"]), 1)
+                self.assertEqual(self.state.read_bytes(), before)
+                out = self.run_tool("apply", "--results", path, expect=1)
+                self.assertEqual(len(out["errors"]), 1)
+                self.assertEqual(out["expired"], [])
+                self.assertEqual(self.read_state()["a"], original)
+
     def test_weights_bands_and_persisted_fields(self):
         self.write_state({"a": entry()})
         out = self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -315,7 +480,7 @@ class Apply(RankStateCase):
 
     def test_expired_status_is_written_through(self):
         self.write_state({"a": entry()})
-        out = self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results([{"key": "a", "status": "expired"}]))
+        out = self.run_tool("apply", "--results", self.results([{"key": "a", "status": "expired"}]))
         self.assertEqual(self.read_state()["a"]["status"], "expired")
         self.assertEqual([r["key"] for r in out["expired"]], ["a"])
 
@@ -326,8 +491,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(deadline="2026-10-01")})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -346,8 +509,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(location="FLAG")})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -367,8 +528,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(location="Athens, Greece")})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -388,8 +547,6 @@ class Apply(RankStateCase):
         scores = {"technical": 90, "experience": 90, "behavioral": 90, "career": 90}
         out = self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -409,8 +566,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(language_note="stale note from a prior run")})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -429,8 +584,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -456,8 +609,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(status="ranked", strengths=["old strength"], gaps=["old gap"])})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [
@@ -478,7 +629,7 @@ class Apply(RankStateCase):
     def test_unknown_key_is_an_error_not_a_silent_drop(self):
         self.write_state({"a": entry()})
         out = self.run_tool(
-            "apply", "--rubric", RUBRIC, "--results", self.results([{"key": "ghost", "status": "scored", "scores": {}}]), expect=1
+            "apply", "--results", self.results([{"key": "ghost", "status": "scored", "scores": {}}]), expect=1
         )
         self.assertEqual(out["errors"][0]["key"], "ghost")
 
@@ -486,8 +637,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         out = self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results([{"key": "a", "status": "scored", "scores": {"technical": 80}}]),
             expect=1,
@@ -499,8 +648,6 @@ class Apply(RankStateCase):
         self.write_state({"a": entry()})
         self.run_tool(
             "apply",
-            "--rubric",
-            RUBRIC,
             "--results",
             self.results(
                 [{"key": "a", "status": "scored",
@@ -521,7 +668,7 @@ class Apply(RankStateCase):
                     scores = dict.fromkeys(dimensions, 50)
                     scores[dimension] = value
                     out = self.run_tool(
-                        "apply", "--rubric", RUBRIC, "--results", self.results([
+                        "apply", "--results", self.results([
                             {"key": "a", "status": "scored", "scores": scores},
                             {"key": "b", "status": "scored", "scores": dict.fromkeys(dimensions, 80)},
                         ]), expect=1,
@@ -537,7 +684,7 @@ class Apply(RankStateCase):
         for value, expected in ((0, 0), (100, 100), (72.5, 73)):
             with self.subTest(value=value):
                 self.write_state({"a": entry()})
-                out = self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results([
+                out = self.run_tool("apply", "--results", self.results([
                     {"key": "a", "status": "scored", "scores": dict.fromkeys(
                         ("technical", "experience", "behavioral", "career"), value)},
                 ]))
@@ -551,12 +698,206 @@ class Apply(RankStateCase):
         self.write_state({"a": entry(status="ranked", rank_score=40, strengths=["old"])})
         scores = {"technical": 90, "experience": 90, "behavioral": 90, "career": 90}
         self.run_tool(
-            "apply", "--rubric", RUBRIC, "--results",
+            "apply", "--results",
             self.results([{"key": "a", "status": "scored", "scores": scores, "strengths": ["new"]}]),
         )
         stored = self.read_state()["a"]
         self.assertEqual(stored["rank_score"], 90)
         self.assertEqual(stored["strengths"], ["new"])
+
+
+class Unreachable(RankStateCase):
+    """#534: a posting that could not be fetched is not a closed posting.
+
+    Both used to become `expired`, which `candidates` never selects again, so a
+    403 or a timeout on ranking day removed an open job from the pipeline for
+    good. `unreachable` is retried on later runs and only gives up to `expired`
+    after 3 attempts with at least 48 hours between the first and the last, so a
+    scheduled run plus a manual one on the same day cannot burn every attempt on
+    one outage.
+    """
+
+    RETRY_FIELDS = ("fetch_attempts", "first_unreachable", "last_fetch_error")
+
+    def results(self, payload):
+        path = self.tmp / "results.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def fail_fetch(self, now, error="403 after curl retry"):
+        return self.run_tool(
+            "apply",
+            "--results",
+            self.results([{"key": "a", "status": "unreachable", "fetch_error": error}]),
+            today=now[:10],
+            now=now,
+        )
+
+    def test_a_failed_fetch_is_recorded_as_unreachable_not_expired(self):
+        self.write_state({"a": entry()})
+        out = self.fail_fetch("2026-09-03T09:00:00Z")
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "unreachable")
+        self.assertEqual(stored["fetch_attempts"], 1)
+        self.assertEqual(stored["first_unreachable"], "2026-09-03T09:00:00Z")
+        self.assertEqual(stored["last_fetch_error"], "403 after curl retry")
+        self.assertEqual([r["key"] for r in out["unreachable"]], ["a"])
+        self.assertEqual(out["unreachable"][0]["fetch_attempts"], 1)
+        self.assertEqual(out["expired"], [])
+        self.assertEqual(out["gave_up"], [])
+
+    def test_unreachable_entries_are_selected_again_on_the_next_run(self):
+        self.write_state(
+            {
+                "a": entry(status="unreachable", fetch_attempts=1, first_unreachable="2026-09-02T09:00:00Z"),
+                "b": entry(status="expired"),
+            }
+        )
+        out = self.run_tool("candidates", "--tracker", str(self.tmp / "none.csv"))
+        self.assertEqual([row["key"] for row in out["selected"]], ["a"])
+
+    def test_three_failures_inside_48_hours_keep_retrying(self):
+        """A scheduled run and a manual one the same day, then one more short of
+        48 hours: the attempt count is reached, the time floor is not."""
+        self.write_state({"a": entry()})
+        for now in ("2026-09-03T09:00:00Z", "2026-09-03T18:00:00Z", "2026-09-05T08:59:00Z"):
+            out = self.fail_fetch(now)
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "unreachable", "47h59m between first and last must not give up")
+        self.assertEqual(stored["fetch_attempts"], 3)
+        self.assertEqual(stored["first_unreachable"], "2026-09-03T09:00:00Z")
+        self.assertEqual(out["gave_up"], [])
+
+    def test_gives_up_after_three_failures_48_hours_apart(self):
+        self.write_state({"a": entry()})
+        for now, error in (
+            ("2026-09-03T09:00:00Z", "403"),
+            ("2026-09-04T09:00:00Z", "timeout"),
+            ("2026-09-05T09:00:00Z", "login wall"),
+        ):
+            out = self.fail_fetch(now, error)
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "expired")
+        self.assertEqual(stored["expired_reason"], "unreachable")
+        self.assertEqual(out["unreachable"], [])
+        self.assertEqual(
+            out["gave_up"],
+            [
+                {
+                    "key": "a",
+                    "title": "SOC Analyst",
+                    "company": "Acme",
+                    "url": "https://example.com/job",
+                    "fetch_attempts": 3,
+                    "last_fetch_error": "login wall",
+                }
+            ],
+            "a job given up on is reported once with its link, since it may still be live",
+        )
+        out = self.run_tool("candidates", "--tracker", str(self.tmp / "none.csv"), today="2026-09-06")
+        self.assertEqual(out["selected"], [])
+
+    def test_a_later_successful_fetch_clears_the_retry_fields(self):
+        self.write_state(
+            {"a": entry(status="unreachable", fetch_attempts=2, first_unreachable="2026-09-01T09:00:00Z",
+                        last_fetch_error="timeout")}
+        )
+        self.run_tool(
+            "apply",
+            "--results",
+            self.results(
+                [{"key": "a", "status": "scored",
+                  "scores": {"technical": 60, "experience": 60, "behavioral": 60, "career": 60}}]
+            ),
+        )
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "ranked")
+        for field in self.RETRY_FIELDS:
+            self.assertNotIn(field, stored)
+
+    def test_a_confirmed_closed_posting_still_expires_at_once(self):
+        self.write_state(
+            {"a": entry(status="unreachable", fetch_attempts=1, first_unreachable="2026-09-02T09:00:00Z",
+                        last_fetch_error="timeout")}
+        )
+        out = self.run_tool("apply", "--results", self.results([{"key": "a", "status": "expired"}]))
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "expired")
+        self.assertNotIn("expired_reason", stored)
+        for field in self.RETRY_FIELDS:
+            self.assertNotIn(field, stored)
+        self.assertEqual([r["key"] for r in out["expired"]], ["a"])
+
+    def test_a_failed_fetch_past_the_stored_deadline_still_expires(self):
+        """A posting that closed on 2026-09-20 and returns 403 on 2026-10-05 is
+        closed by its own deadline, not unreachable: it expires at once, as the
+        scored path would, rather than being retried and later listed under
+        "Gave up, check manually" as possibly live."""
+        self.write_state(
+            {"a": entry(deadline="2026-09-20", status="unreachable", fetch_attempts=1,
+                        first_unreachable="2026-10-04T09:00:00Z", last_fetch_error="timeout")}
+        )
+        out = self.fail_fetch("2026-10-05T09:00:00Z")
+        stored = self.read_state()["a"]
+        self.assertEqual(stored["status"], "expired")
+        self.assertNotIn("expired_reason", stored)
+        for field in self.RETRY_FIELDS:
+            self.assertNotIn(field, stored)
+        self.assertEqual([r["key"] for r in out["expired"]], ["a"])
+        self.assertEqual(out["unreachable"], [])
+        self.assertEqual(out["gave_up"], [])
+
+    def test_fetch_error_is_stored_as_bounded_plain_text(self):
+        self.write_state({"a": entry()})
+        self.fail_fetch("2026-09-03T09:00:00Z", error="x" * 500)
+        self.assertLessEqual(len(self.read_state()["a"]["last_fetch_error"]), 200)
+
+    def test_an_unknown_status_is_an_error_not_a_missing_score(self):
+        self.write_state({"a": entry()})
+        out = self.run_tool(
+            "apply", "--results", self.results([{"key": "a", "status": "unreachble"}]), expect=1
+        )
+        self.assertIn("unknown status 'unreachble'", out["errors"][0]["error"])
+        self.assertEqual(self.read_state()["a"]["status"], "new", "a rejected result never half-writes an entry")
+
+    def test_malformed_results_are_errors_not_a_traceback(self):
+        self.write_state({"a": entry(), "b": entry(title="Other")})
+        out = self.run_tool(
+            "apply",
+            "--results",
+            self.results(
+                [
+                    7,
+                    "a",
+                    {"key": ["a"], "scores": {}},
+                    {"key": "a", "scores": [90, 80]},
+                    {"key": "b", "scores": {"technical": 80, "experience": 80, "behavioral": 80, "career": 80}},
+                ]
+            ),
+            expect=1,
+        )
+        self.assertEqual(
+            [e["error"] for e in out["errors"]],
+            [
+                "result is not an object",
+                "result is not an object",
+                "no such key in seen_jobs.json",
+                "scores must be an object",
+            ],
+        )
+        self.assertEqual([r["key"] for r in out["ranked"]], ["b"], "valid results in the same batch still apply")
+        self.assertEqual(self.read_state()["a"]["status"], "new")
+
+    def test_an_unknown_gate_verdict_is_an_error_not_a_shortlisted_job(self):
+        scores = {dimension: 90 for dimension in ("technical", "experience", "behavioral", "career")}
+        for field, value in (("location_verdict", "Fail"), ("language_gate", "fail"), ("location_verdict", "REJECT")):
+            with self.subTest(field=field, value=value):
+                self.write_state({"a": entry()})
+                result = {"key": "a", "status": "scored", "scores": scores, field: value}
+                out = self.run_tool("apply", "--results", self.results([result]), expect=1)
+                self.assertEqual(out["ranked"], [], "a deal-breaker spelled differently must not reach the shortlist")
+                self.assertIn(f"unknown {field} {value!r}", out["errors"][0]["error"])
+                self.assertEqual(self.read_state()["a"]["status"], "new", "a rejected result never half-writes an entry")
 
 
 class ApplyGuards(RankStateCase):
@@ -574,8 +915,11 @@ class ApplyGuards(RankStateCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return str(path)
 
-    def apply(self, payload, *extra, expect=0):
-        return self.run_tool("apply", "--rubric", RUBRIC, "--results", self.results(payload), *extra, expect=expect)
+    def apply(self, payload, *extra, expect=0, today=TODAY, now=None):
+        return self.run_tool(
+            "apply", "--rubric", RUBRIC, "--results", self.results(payload), *extra,
+            expect=expect, today=today, now=now,
+        )
 
     def scored(self, key, **over):
         result = {"key": key, "status": "scored", "scores": dict(FIFTY)}
@@ -644,38 +988,62 @@ class ApplyGuards(RankStateCase):
         self.assertEqual(self.read_state()["a"], entry(), "a malformed result never touches its entry")
         self.assertEqual(self.read_state()["b"]["status"], "ranked")
 
-    # --- unknown / expired ----------------------------------------------------
+    # --- unreachable / expired -------------------------------------------------
 
-    def test_unknown_on_an_unranked_entry_records_the_failed_fetch(self):
+    def test_unreachable_on_an_open_entry_is_retried_not_kept(self):
         self.write_state({"a": entry()})
-        out = self.apply([{"key": "a", "status": "unknown"}])
+        out = self.apply([{"key": "a", "status": "unreachable"}])
         stored = self.read_state()["a"]
-        self.assertEqual(stored["status"], "unknown")
-        self.assertEqual(stored["last_fetch_failed"], TODAY)
-        self.assertEqual(out["expired"], [], "unknown is never promoted to expired")
-        self.assertEqual(len(out["unknown"]), 1)
-        self.assertEqual(out["unknown"][0]["key"], "a")
-        self.assertFalse(out["unknown"][0]["kept_existing_score"])
-        self.assertEqual(out["unknown"][0]["url"], "https://example.com/job")
+        self.assertEqual(stored["status"], "unreachable")
+        self.assertEqual(stored["fetch_attempts"], 1)
+        self.assertEqual(out["expired"], [], "unreachable is never promoted to expired on one failure")
+        self.assertEqual(out["kept"], [], "an open entry has nothing to keep")
+        self.assertEqual([r["key"] for r in out["unreachable"]], ["a"])
+        self.assertEqual(out["unreachable"][0]["url"], "https://example.com/job")
 
-    def test_unknown_never_destroys_an_existing_ranking(self):
+    def test_unreachable_never_destroys_an_existing_ranking(self):
         ranked = entry(status="ranked", rank_score=81, rank_verdict="Strong Fit", rubric="1.0.0",
                        strengths=["keep me"], visa="OPEN")
         self.write_state({"a": ranked})
-        out = self.apply([{"key": "a", "status": "unknown", "still_open": "unknown"}])
+        out = self.apply([{"key": "a", "status": "unreachable", "still_open": "unknown", "fetch_error": "403"}])
         self.assertEqual(self.read_state()["a"], ranked, "every field of a ranked entry survives a failed fetch")
-        self.assertTrue(out["unknown"][0]["kept_existing_score"])
-        self.assertEqual(out["unknown"][0]["rank_score"], 81)
+        self.assertEqual(out["unreachable"], [])
+        self.assertEqual(out["gave_up"], [])
+        self.assertEqual(len(out["kept"]), 1)
+        self.assertEqual(out["kept"][0]["kept_status"], "ranked")
+        self.assertTrue(out["kept"][0]["kept_existing_score"])
+        self.assertEqual(out["kept"][0]["rank_score"], 81)
 
-    def test_unknown_never_reopens_a_confirmed_expiry(self):
+    def test_repeated_failures_never_walk_a_ranked_entry_into_gave_up(self):
+        """The retry counters decide whether an *open* posting is real. Three
+        throttled re-scores of a ranked one, 48 hours apart, must not expire it."""
+        ranked = entry(status="ranked", rank_score=70, rank_verdict="Good Fit", rubric=RUBRIC)
+        self.write_state({"a": ranked})
+        for now in ("2026-09-03T09:00:00Z", "2026-09-04T09:00:00Z", "2026-09-05T09:00:00Z"):
+            out = self.apply([{"key": "a", "status": "unreachable"}], today=now[:10], now=now)
+        self.assertEqual(self.read_state()["a"], ranked)
+        self.assertEqual(out["gave_up"], [])
+
+    def test_a_ranked_entry_past_its_deadline_still_expires_on_a_failed_fetch(self):
+        """A passed deadline is positive evidence, not a failed retrieval - the
+        same expiry rule 6's sweep would apply to a ranked entry."""
+        self.write_state({"a": entry(status="ranked", rank_score=70, deadline="2026-09-01")})
+        out = self.apply([{"key": "a", "status": "unreachable"}])
+        self.assertEqual(self.read_state()["a"]["status"], "expired")
+        self.assertEqual([r["key"] for r in out["expired"]], ["a"])
+        self.assertEqual(out["kept"], [])
+
+    def test_unreachable_never_reopens_a_confirmed_expiry(self):
         dead = entry(status="expired", expired_confirmed="2026-09-01")
         self.write_state({"a": dead})
-        out = self.apply([{"key": "a", "status": "unknown"}])
+        out = self.apply([{"key": "a", "status": "unreachable"}])
         self.assertEqual(self.read_state()["a"], dead, "a failed fetch adds nothing to a confirmed expiry")
-        self.assertEqual(out["unknown"][0]["kept_status"], "expired")
-        self.assertFalse(out["unknown"][0]["kept_existing_score"])
+        self.assertEqual(out["kept"][0]["kept_status"], "expired")
+        self.assertFalse(out["kept"][0]["kept_existing_score"])
 
-    def test_a_later_successful_score_clears_the_failed_fetch_marker(self):
+    def test_a_later_successful_score_clears_the_legacy_failed_fetch_marker(self):
+        """`unknown` + `last_fetch_failed` is what this fork wrote before it took
+        upstream's `unreachable` model; a store carrying them still migrates."""
         self.write_state({"a": entry(status="unknown", last_fetch_failed="2026-09-01")})
         self.apply([self.scored("a")])
         stored = self.read_state()["a"]
@@ -694,7 +1062,7 @@ class ApplyGuards(RankStateCase):
     def _all_failed_batch(self):
         keys = [f"k{i}" for i in range(5)]
         self.write_state({k: entry(title=f"Role {k}") for k in keys})
-        return [{"key": k, "status": "expired" if i % 2 else "unknown"} for i, k in enumerate(keys)]
+        return [{"key": k, "status": "expired" if i % 2 else "unreachable"} for i, k in enumerate(keys)]
 
     def test_all_failed_batch_is_refused_and_nothing_is_written(self):
         """Measured 28 Aug 2026: 30/30 fetches failed, a posting verified live
@@ -709,9 +1077,22 @@ class ApplyGuards(RankStateCase):
         self.assertFalse((self.tmp / BACKUP_NAME).exists(), "a refused run makes no backup either")
         out = json.loads(proc.stdout)
         self.assertFalse(out["written"])
+        self.assertEqual((out["refused"]["expired"], out["refused"]["unreachable"]), (2, 3))
         self.assertIn("throttl", out["refused"]["message"])
         self.assertIn("--force-expired", out["refused"]["message"])
         self.assertIn("throttl", proc.stderr)
+
+    def test_an_all_unreachable_batch_is_refused_too(self):
+        """Nothing in it expires at once, but writing it spends a retry attempt
+        on every entry for one outage - the attempts the 48-hour floor protects."""
+        self.write_state({f"k{i}": entry() for i in range(5)})
+        before = self.state.read_bytes()
+        proc = self.run_raw(
+            "apply", "--rubric", RUBRIC, "--results",
+            self.results([{"key": f"k{i}", "status": "unreachable"} for i in range(5)]),
+        )
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(self.state.read_bytes(), before)
 
     def test_all_failed_batch_is_refused_on_dry_run_too(self):
         payload = self._all_failed_batch()
@@ -724,7 +1105,7 @@ class ApplyGuards(RankStateCase):
         self.assertTrue(out["written"])
         stored = self.read_state()
         self.assertEqual(stored["k1"]["status"], "expired")
-        self.assertEqual(stored["k0"]["status"], "unknown")
+        self.assertEqual(stored["k0"]["status"], "unreachable")
 
     def test_guard_needs_a_batch_of_five(self):
         self.write_state({f"k{i}": entry() for i in range(4)})
